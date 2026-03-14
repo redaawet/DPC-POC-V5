@@ -85,8 +85,12 @@ class Transfer:
             timestamp=datetime.now(tz=timezone.utc),
         )
 
-    def signing_payload(self) -> bytes:
-        """Payload used for sender signature."""
+    def signing_payload(self, token: Token) -> bytes:
+        """Payload used for sender signature.
+
+        The transfer signature also commits to the token state being delivered so
+        token tampering cannot occur without invalidating the signature.
+        """
         return _canonical_json(
             {
                 "transfer_id": self.transfer_id,
@@ -96,6 +100,16 @@ class Transfer:
                 "nonce": self.nonce,
                 "prev_transfer_id": self.prev_transfer_id,
                 "timestamp": self.timestamp.isoformat(),
+                "token": {
+                    "token_id": token.token_id,
+                    "value": token.value,
+                    "issuer_pk": token.issuer_pk,
+                    "owner_pk": token.owner_pk,
+                    "nonce": token.nonce,
+                    "hop_count": token.hop_count,
+                    "origin_token_id": token.origin_token_id,
+                    "issuer_signature": token.issuer_signature,
+                },
             }
         )
 
