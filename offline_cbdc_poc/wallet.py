@@ -109,7 +109,7 @@ class Wallet:
                 nonce=spend_piece.nonce,
                 prev_transfer_id=self.transfer_history.get(token.token_id),
             )
-            transfer.signature = sign(transfer.signing_payload(), self.private_key_hex)
+            transfer.signature = sign(transfer.signing_payload(spend_piece), self.private_key_hex)
 
             self.transfer_history[spend_piece.token_id] = transfer.transfer_id
             transfers.append(transfer)
@@ -133,7 +133,9 @@ class Wallet:
             return False
         if not is_not_expired(token.created_at, self.policy.TOKEN_EXPIRY_SECONDS):
             return False
-        if not verify(transfer.signing_payload(), transfer.signature, transfer.sender_pk):
+        if transfer.token_id != token.token_id:
+            return False
+        if not verify(transfer.signing_payload(token), transfer.signature, transfer.sender_pk):
             return False
         return True
 
