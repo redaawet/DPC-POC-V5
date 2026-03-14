@@ -2,6 +2,12 @@
 
 A Python 3.10+ proof-of-concept for offline CBDC bearer-token payments between wallets.
 
+## Requirements
+
+- Python 3.10+
+- Recommended: `cryptography` package (`pip install cryptography`) for cross-platform Ed25519 support.
+- Optional fallback: OpenSSL CLI available on `PATH`.
+
 ## Modules
 
 - `crypto_utils.py` – Ed25519 key generation/sign/verify.
