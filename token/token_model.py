@@ -23,22 +23,27 @@ class Token:
     issuer_sig: str
     transfer_chain: list[TransferRecord] = field(default_factory=list)
 
-    def issuance_dict(self) -> OrderedDict[str, object]:
+    def issuance_dict(self, original_owner_pk: str | None = None) -> OrderedDict[str, object]:
         """Return deterministic issuance payload fields."""
+        owner_pk = self.current_owner_pk if original_owner_pk is None else original_owner_pk
         return OrderedDict(
             [
                 ("token_id", self.token_id),
                 ("value", self.value),
                 ("issuer_pk", self.issuer_pk),
-                ("current_owner_pk", self.current_owner_pk),
+                ("current_owner_pk", owner_pk),
                 ("expiry", self.expiry),
                 ("policy", self.policy),
             ]
         )
 
-    def issuance_payload(self) -> bytes:
+    def issuance_payload(self, original_owner_pk: str | None = None) -> bytes:
         """Serialize issuance payload with deterministic JSON field ordering."""
-        return json.dumps(self.issuance_dict(), separators=(",", ":"), sort_keys=True).encode("utf-8")
+        return json.dumps(
+            self.issuance_dict(original_owner_pk=original_owner_pk),
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
 
     def append_transfer(self, sender_sk: str, receiver_pk: str) -> TransferRecord:
         """Append a transfer signed by current owner and update current owner."""
@@ -76,7 +81,15 @@ class Token:
         """Validate issuer signature and each transfer continuity/signature."""
         if issuer_pk != self.issuer_pk:
             return False
-        if not verify_signature(self.issuer_pk, self.issuance_payload(), self.issuer_sig):
+        original_owner_pk = self.current_owner_pk
+        if self.transfer_chain:
+            original_owner_pk = self.transfer_chain[0].sender_pk
+
+        if not verify_signature(
+            self.issuer_pk,
+            self.issuance_payload(original_owner_pk=original_owner_pk),
+            self.issuer_sig,
+        ):
             return False
 
         owner_pk = self.current_owner_pk if not self.transfer_chain else None
