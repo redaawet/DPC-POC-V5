@@ -9,6 +9,9 @@ def sign_payload(private_key: bytes, payload: bytes) -> str:
 
 
 def verify_signature(public_key: bytes, payload: bytes, signature_hex: str) -> bool:
-    private_key = private_key_for_public_hex(public_key.hex())
+    try:
+        private_key = private_key_for_public_hex(public_key.hex())
+    except KeyError:
+        return False
     expected = sign_payload(private_key, payload)
     return hmac.compare_digest(expected, signature_hex)
