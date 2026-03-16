@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 import json
 from typing import Protocol
 
-from token.token_model import Token
-from token.transfer_chain import TransferRecord
+from dpc_token.token_model import Token
+from dpc_token.transfer_chain import TransferRecord
 
 
 class KeyStore(Protocol):
@@ -107,6 +107,7 @@ def _token_from_payload(payload: str) -> Token:
         token_id=data["token_id"],
         value=data["value"],
         issuer_pk=data["issuer_pk"],
+        initial_owner_pk=data.get("initial_owner_pk"),
         current_owner_pk=data["current_owner_pk"],
         expiry=data["expiry"],
         policy=data["policy"],
