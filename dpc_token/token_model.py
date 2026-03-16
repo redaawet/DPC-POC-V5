@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import json
 
 from crypto.signatures import verify_signature
-from token.transfer_chain import TransferRecord
+from dpc_token.transfer_chain import TransferRecord
 
 
 @dataclass
@@ -22,6 +22,12 @@ class Token:
     policy: dict
     issuer_sig: str
     transfer_chain: list[TransferRecord] = field(default_factory=list)
+    initial_owner_pk: str | None = None
+
+    def __post_init__(self) -> None:
+        """Default immutable issuance owner for backward compatibility."""
+        if self.initial_owner_pk is None:
+            self.initial_owner_pk = self.current_owner_pk
 
     def issuance_dict(self) -> OrderedDict[str, object]:
         """Return deterministic issuance payload fields."""
@@ -30,7 +36,7 @@ class Token:
                 ("token_id", self.token_id),
                 ("value", self.value),
                 ("issuer_pk", self.issuer_pk),
-                ("current_owner_pk", self.current_owner_pk),
+                ("initial_owner_pk", self.initial_owner_pk),
                 ("expiry", self.expiry),
                 ("policy", self.policy),
             ]
@@ -60,6 +66,7 @@ class Token:
                 ("token_id", self.token_id),
                 ("value", self.value),
                 ("issuer_pk", self.issuer_pk),
+                ("initial_owner_pk", self.initial_owner_pk),
                 ("current_owner_pk", self.current_owner_pk),
                 ("expiry", self.expiry),
                 ("policy", self.policy),
@@ -79,10 +86,9 @@ class Token:
         if not verify_signature(self.issuer_pk, self.issuance_payload(), self.issuer_sig):
             return False
 
-        owner_pk = self.current_owner_pk if not self.transfer_chain else None
+        owner_pk = self.initial_owner_pk
         if self.transfer_chain:
-            owner_pk = self.transfer_chain[0].sender_pk
-            for idx, transfer in enumerate(self.transfer_chain):
+            for transfer in self.transfer_chain:
                 if transfer.token_id != self.token_id:
                     return False
                 if not transfer.verify():
@@ -92,4 +98,6 @@ class Token:
                 owner_pk = transfer.receiver_pk
             if owner_pk != self.current_owner_pk:
                 return False
+        elif owner_pk != self.current_owner_pk:
+            return False
         return True

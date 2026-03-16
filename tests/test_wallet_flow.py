@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("cryptography")
 
 from crypto.signatures import generate_keypair, sign_message
-from token.token_model import Token
+from dpc_token.token_model import Token
 from wallet.wallet import DictKeyStore, Wallet
 
 
