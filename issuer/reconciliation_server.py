@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .crypto_utils import verify
-from .issuer import Issuer
-from .models import PaymentBundle, Token, Transfer
+from crypto.crypto_utils import verify
+from issuer.issuer import Issuer
+from token.poc_models import PaymentBundle, Token, Transfer
 
 
 @dataclass

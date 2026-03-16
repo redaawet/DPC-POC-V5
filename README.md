@@ -1,4 +1,4 @@
-# offline_cbdc_poc
+# Offline CBDC PoC
 
 A Python 3.10+ proof-of-concept for offline CBDC bearer-token payments between wallets.
 
@@ -10,14 +10,14 @@ A Python 3.10+ proof-of-concept for offline CBDC bearer-token payments between w
 
 ## Modules
 
-- `crypto_utils.py` – Ed25519 key generation/sign/verify.
-- `models.py` – Token, Transfer, PaymentBundle models.
-- `wallet.py` – UTR/STR wallet logic, payment creation, replay protection.
-- `issuer.py` – Central bank simulator minting signed root tokens.
-- `policy.py` – configurable policy caps.
-- `network_simulator.py` – offline BLE/NFC style bundle send.
-- `reconciliation_server.py` – settlement, chain checks, double-spend detection.
-- `main_demo.py` – complete scenario walkthrough.
+- `crypto/crypto_utils.py` - Ed25519 key generation/sign/verify.
+- `token/poc_models.py` - Token, Transfer, PaymentBundle models.
+- `wallet/offline_wallet.py` - UTR/STR wallet logic, payment creation, replay protection.
+- `issuer/issuer.py` - Central bank simulator minting signed root tokens.
+- `protocol/policy.py` - configurable policy caps.
+- `protocol/network_simulator.py` - offline BLE/NFC style bundle send.
+- `issuer/reconciliation_server.py` - settlement, chain checks, double-spend detection.
+- `main_demo.py` - complete scenario walkthrough.
 
 ## Run
 
@@ -31,11 +31,7 @@ python main_demo.py
 - Ed25519 signatures for issuer and transfer messages.
 - UTR (unspent) and STR (spent) registers.
 - Multi-token payment bundles.
-- Policy cap enforcement:
-  - `MAX_TX_VALUE`
-  - `MAX_TOKEN_HOPS`
-  - `MAX_WALLET_BALANCE`
-  - `TOKEN_EXPIRY_SECONDS`
+- Policy cap enforcement for `MAX_TX_VALUE`, `MAX_TOKEN_HOPS`, `MAX_WALLET_BALANCE`, `TOKEN_EXPIRY_SECONDS`.
 - Change handling via local token splitting.
 - Replay protection using processed transfer IDs.
 - Reconciliation with double-spend handling (`first accepted`, `second DOUBLE_SPEND`).

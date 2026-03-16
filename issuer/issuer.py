@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from .crypto_utils import sign
-from .models import Token
+from crypto.crypto_utils import sign
+from token.poc_models import Token
 
 
 class Issuer:

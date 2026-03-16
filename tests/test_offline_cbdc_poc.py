@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
-from offline_cbdc_poc.crypto_utils import generate_keypair, sign, verify
-from offline_cbdc_poc.issuer import Issuer
-from offline_cbdc_poc.policy import PolicyConfig
-from offline_cbdc_poc.reconciliation_server import ReconciliationServer
-from offline_cbdc_poc.wallet import Wallet
+from crypto.crypto_utils import generate_keypair, sign, verify
+from issuer.issuer import Issuer
+from issuer.reconciliation_server import ReconciliationServer
+from protocol.policy import PolicyConfig
+from wallet.offline_wallet import Wallet
 
 
 def make_wallet(name: str, policy: PolicyConfig) -> Wallet:

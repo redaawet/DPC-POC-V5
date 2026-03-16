@@ -4,9 +4,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Iterable
 
-from .crypto_utils import sign, verify
-from .models import PaymentBundle, Token, Transfer
-from .policy import PolicyConfig, is_not_expired
+from crypto.crypto_utils import sign, verify
+from protocol.policy import PolicyConfig, is_not_expired
+from token.poc_models import PaymentBundle, Token, Transfer
 
 
 class Wallet:
