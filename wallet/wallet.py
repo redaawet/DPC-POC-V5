@@ -132,7 +132,20 @@ class Wallet:
 def _token_from_payload(payload: str) -> Token:
     """Deserialize a token payload JSON string into a ``Token`` instance."""
     data = json.loads(payload)
-    transfer_chain = [TransferRecord(**record) for record in data.get("transfer_chain", [])]
+    transfer_chain = [
+        TransferRecord(
+            transfer_id=record["transfer_id"],
+            token_id=record["token_id"],
+            sender_pk=record["sender_pk"],
+            receiver_pk=record["receiver_pk"],
+            nonce=record.get("nonce", index + 1),
+            parent_transfer_id=record.get("parent_transfer_id"),
+            prev_transfer_hash=record.get("prev_transfer_hash"),
+            timestamp=record["timestamp"],
+            signature=record["signature"],
+        )
+        for index, record in enumerate(data.get("transfer_chain", []))
+    ]
     return Token(
         token_id=data["token_id"],
         value=data["value"],
