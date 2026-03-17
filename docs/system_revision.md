@@ -112,7 +112,7 @@ docs/
 ## Implemented Security Properties
 
 - **Token Authenticity**
-  Issuer signatures guarantee that accepted tokens originate from the issuer and are valid.
+  Issuer signatures and chain validation prove internal token-chain consistency for the embedded issuer key, but true issuer authenticity requires validating that issuer key against a configured trust anchor.
 
 - **Transfer Authorization**
   Each transfer must include a valid signature from the previous owner in the transfer chain.
