@@ -32,6 +32,6 @@ python main_demo.py
 - UTR (unspent) and STR (spent) registers.
 - Multi-token payment bundles.
 - Policy cap enforcement for `MAX_TX_VALUE`, `MAX_TOKEN_HOPS`, `MAX_WALLET_BALANCE`, `TOKEN_EXPIRY_SECONDS`.
-- Change handling via local token splitting.
+- Cash-like change handling where receivers return change using their own tokens.
 - Replay protection using processed transfer IDs.
 - Reconciliation with double-spend handling (`first accepted`, `second DOUBLE_SPEND`).

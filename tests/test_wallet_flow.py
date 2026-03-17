@@ -14,13 +14,12 @@ def _issued_token(issuer_sk: str, issuer_pk: str, owner_pk: str, token_id: str =
         token_id=token_id,
         value=50,
         issuer_pk=issuer_pk,
-        current_owner_pk=owner_pk,
+        owner_pk=owner_pk,
         expiry="2030-01-01T00:00:00+00:00",
-        policy={"max_hops": 5, "max_value": 100},
-        issuer_sig="",
+        issuer_signature="",
         transfer_chain=[],
     )
-    token.issuer_sig = sign_message(issuer_sk, token.issuance_payload())
+    token.issuer_signature = sign_message(issuer_sk, token.issuance_payload())
     return token
 
 
@@ -74,7 +73,7 @@ def test_receive_is_atomic_and_rolls_back_on_failure() -> None:
 
     # Corrupt receiver without resigning so validation fails.
     mutated = json.loads(bad_payload)
-    mutated["current_owner_pk"] = bob_pk
+    mutated["owner_pk"] = bob_pk
     bad_payload = json.dumps(mutated)
 
     before_keys = sorted(bob_wallet.utr.keys())

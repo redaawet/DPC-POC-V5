@@ -17,11 +17,38 @@ class Token:
     token_id: str
     value: int
     issuer_pk: str
-    current_owner_pk: str
+    owner_pk: str
     expiry: str
-    policy: dict
-    issuer_sig: str
+    issuer_signature: str
     transfer_chain: list[TransferRecord] = field(default_factory=list)
+    _locked: bool = field(default=False, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._locked = True
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if getattr(self, "_locked", False) and name in {"token_id", "value"}:
+            current = getattr(self, name)
+            if current != value:
+                raise AttributeError(f"{name} is immutable")
+        super().__setattr__(name, value)
+
+    # Backward-compatible aliases.
+    @property
+    def current_owner_pk(self) -> str:
+        return self.owner_pk
+
+    @current_owner_pk.setter
+    def current_owner_pk(self, value: str) -> None:
+        self.owner_pk = value
+
+    @property
+    def issuer_sig(self) -> str:
+        return self.issuer_signature
+
+    @issuer_sig.setter
+    def issuer_sig(self, value: str) -> None:
+        self.issuer_signature = value
 
     def issuance_dict(self) -> OrderedDict[str, object]:
         """Return deterministic issuance payload fields."""
@@ -30,9 +57,8 @@ class Token:
                 ("token_id", self.token_id),
                 ("value", self.value),
                 ("issuer_pk", self.issuer_pk),
-                ("current_owner_pk", self.current_owner_pk),
+                ("owner_pk", self.owner_pk),
                 ("expiry", self.expiry),
-                ("policy", self.policy),
             ]
         )
 
@@ -41,8 +67,8 @@ class Token:
         return json.dumps(self.issuance_dict(), separators=(",", ":"), sort_keys=True).encode("utf-8")
 
     def append_transfer(self, sender_sk: str, receiver_pk: str) -> TransferRecord:
-        """Append a transfer signed by current owner and update current owner."""
-        sender_pk = self.current_owner_pk
+        """Append a transfer signed by owner and update owner through the transfer chain."""
+        sender_pk = self.owner_pk
         transfer = TransferRecord.create(
             token_id=self.token_id,
             sender_sk=sender_sk,
@@ -50,7 +76,7 @@ class Token:
             receiver_pk=receiver_pk,
         )
         self.transfer_chain.append(transfer)
-        self.current_owner_pk = receiver_pk
+        self.owner_pk = receiver_pk
         return transfer
 
     def to_ordered_dict(self) -> OrderedDict[str, object]:
@@ -60,10 +86,9 @@ class Token:
                 ("token_id", self.token_id),
                 ("value", self.value),
                 ("issuer_pk", self.issuer_pk),
-                ("current_owner_pk", self.current_owner_pk),
+                ("owner_pk", self.owner_pk),
                 ("expiry", self.expiry),
-                ("policy", self.policy),
-                ("issuer_sig", self.issuer_sig),
+                ("issuer_signature", self.issuer_signature),
                 ("transfer_chain", [transfer.to_dict() for transfer in self.transfer_chain]),
             ]
         )
@@ -76,13 +101,13 @@ class Token:
         """Validate issuer signature and each transfer continuity/signature."""
         if issuer_pk != self.issuer_pk:
             return False
-        if not verify_signature(self.issuer_pk, self.issuance_payload(), self.issuer_sig):
+        if not verify_signature(self.issuer_pk, self.issuance_payload(), self.issuer_signature):
             return False
 
-        owner_pk = self.current_owner_pk if not self.transfer_chain else None
+        owner_pk = self.owner_pk if not self.transfer_chain else None
         if self.transfer_chain:
             owner_pk = self.transfer_chain[0].sender_pk
-            for idx, transfer in enumerate(self.transfer_chain):
+            for transfer in self.transfer_chain:
                 if transfer.token_id != self.token_id:
                     return False
                 if not transfer.verify():
@@ -90,6 +115,6 @@ class Token:
                 if transfer.sender_pk != owner_pk:
                     return False
                 owner_pk = transfer.receiver_pk
-            if owner_pk != self.current_owner_pk:
+            if owner_pk != self.owner_pk:
                 return False
         return True

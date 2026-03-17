@@ -34,7 +34,7 @@ class DictKeyStore:
 
 
 class Wallet:
-    """Wallet maintaining an unspent token register (UTR) and spent token register (STR)."""
+    """Wallet maintaining unspent token register (UTR) and spent token register (STR)."""
 
     def __init__(self, owner_pk: str, keystore: KeyStore) -> None:
         self.owner_pk = owner_pk
@@ -44,11 +44,41 @@ class Wallet:
 
     def add_token(self, token: Token) -> None:
         """Add a token to UTR after ownership and signature-chain validation."""
-        if token.current_owner_pk != self.owner_pk:
+        if token.owner_pk != self.owner_pk:
             raise ValueError("token is not owned by this wallet")
         if not token.validate_chain(token.issuer_pk):
             raise ValueError("invalid token transfer chain")
         self.utr[token.token_id] = deepcopy(token)
+
+    def select_tokens(self, amount: int) -> list[Token]:
+        """Select minimal token set with sum >= requested amount."""
+        if amount < 0:
+            raise ValueError("amount must be non-negative")
+        if amount == 0:
+            return []
+
+        selected: list[Token] = []
+        total = 0
+        for token in sorted(self.utr.values(), key=lambda tok: tok.value):
+            selected.append(token)
+            total += token.value
+            if total >= amount:
+                return selected
+        raise ValueError("insufficient funds")
+
+    def send_tokens(self, receiver_pk: str, tokens: list[Token]) -> list[str]:
+        """Transfer selected tokens and return serialized payloads."""
+        sender_sk = self.keystore.get_private_key(self.owner_pk)
+        sent_payloads: list[str] = []
+        for token in tokens:
+            if token.token_id not in self.utr:
+                raise ValueError(f"token {token.token_id} unavailable")
+
+            local_token = self.utr.pop(token.token_id)
+            local_token.append_transfer(sender_sk=sender_sk, receiver_pk=receiver_pk)
+            self.str[local_token.token_id] = deepcopy(local_token)
+            sent_payloads.append(local_token.to_json())
+        return sent_payloads
 
     def send_token(self, receiver_pk: str) -> str:
         """Send one token by moving it UTR->STR and appending a signed transfer record."""
@@ -56,31 +86,31 @@ class Wallet:
             raise ValueError("no tokens available to send")
 
         token_id = sorted(self.utr.keys())[0]
-        token = self.utr.pop(token_id)
-        previous_owner = token.current_owner_pk
+        token = self.utr[token_id]
+        return self.send_tokens(receiver_pk, [token])[0]
 
-        try:
-            sender_sk = self.keystore.get_private_key(self.owner_pk)
-            token.append_transfer(sender_sk=sender_sk, receiver_pk=receiver_pk)
-        except Exception:
-            self.utr[token_id] = token
-            token.current_owner_pk = previous_owner
-            raise
+    def initiate_payment(self, price: int, receiver_pk: str) -> list[str]:
+        """Select and send enough tokens to cover a requested price."""
+        tokens = self.select_tokens(price)
+        return self.send_tokens(receiver_pk=receiver_pk, tokens=tokens)
 
-        self.str[token_id] = deepcopy(token)
-        return token.to_json()
+    def process_payment(self, tokens: list[Token], price: int) -> list[Token]:
+        """Validate inbound payment value and choose change tokens from receiver wallet."""
+        total = sum(token.value for token in tokens)
+        if total < price:
+            raise ValueError("reject_payment: total paid less than price")
+
+        change = total - price
+        return self.select_tokens(change)
 
     def receive_token(self, payload: str) -> bool:
-        """Receive a token payload atomically.
-
-        Any parse/validation failure restores prior wallet state and returns ``False``.
-        """
+        """Receive a token payload atomically."""
         utr_before = deepcopy(self.utr)
         str_before = deepcopy(self.str)
 
         try:
             token = _token_from_payload(payload)
-            if token.current_owner_pk != self.owner_pk:
+            if token.owner_pk != self.owner_pk:
                 raise ValueError("token receiver does not match wallet owner")
             if not token.validate_chain(token.issuer_pk):
                 raise ValueError("invalid token transfer chain")
@@ -107,9 +137,8 @@ def _token_from_payload(payload: str) -> Token:
         token_id=data["token_id"],
         value=data["value"],
         issuer_pk=data["issuer_pk"],
-        current_owner_pk=data["current_owner_pk"],
+        owner_pk=data.get("owner_pk", data.get("current_owner_pk")),
         expiry=data["expiry"],
-        policy=data["policy"],
-        issuer_sig=data["issuer_sig"],
+        issuer_signature=data.get("issuer_signature", data.get("issuer_sig", "")),
         transfer_chain=transfer_chain,
     )

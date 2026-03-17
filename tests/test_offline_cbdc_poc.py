@@ -1,3 +1,7 @@
+import pytest
+
+pytest.importorskip("cryptography")
+
 from datetime import datetime, timedelta, timezone
 
 from crypto.crypto_utils import generate_keypair, sign, verify
@@ -22,7 +26,7 @@ def test_ed25519_sign_verify_roundtrip() -> None:
     assert not verify(b"tampered", sig, pk)
 
 
-def test_wallet_create_payment_split_and_receive() -> None:
+def test_wallet_create_payment_whole_token_and_receive() -> None:
     policy = PolicyConfig(MAX_TX_VALUE=100, MAX_TOKEN_HOPS=5, MAX_WALLET_BALANCE=1_000, TOKEN_EXPIRY_SECONDS=3600)
     issuer_sk, issuer_pk = generate_keypair()
     issuer = Issuer(issuer_sk, issuer_pk)
@@ -37,8 +41,8 @@ def test_wallet_create_payment_split_and_receive() -> None:
     results = bob.receive_bundle(bundle)
 
     assert all(ok for _, ok in results)
-    assert alice.balance() == 5
-    assert bob.balance() == 25
+    assert alice.balance() == 0
+    assert bob.balance() == 30
 
 
 def test_receive_bundle_replay_is_rejected() -> None:
