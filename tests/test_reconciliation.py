@@ -7,7 +7,7 @@ pytest.importorskip("cryptography")
 
 from crypto.signatures import generate_keypair, sign_message
 from issuer.reconciliation import ReconciliationEngine
-from token.token_model import Token
+from digital_token.token_model import Token
 
 
 def _issued_token(issuer_sk: str, issuer_pk: str, owner_pk: str, *, token_id: str = "tok-recon") -> Token:

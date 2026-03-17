@@ -1,7 +1,7 @@
 """Offline BLE/NFC-like bundle exchange simulator."""
 from __future__ import annotations
 
-from token.poc_models import PaymentBundle
+from digital_token.poc_models import PaymentBundle
 from wallet.offline_wallet import Wallet
 
 

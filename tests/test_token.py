@@ -3,7 +3,7 @@ import pytest
 pytest.importorskip("cryptography")
 
 from crypto.signatures import generate_keypair, sign_message
-from token.token_model import Token
+from digital_token.token_model import Token
 
 
 def test_token_issuance_transfer_and_chain_validation() -> None:

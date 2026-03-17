@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 
-from token.token_model import Token
+from digital_token.token_model import Token
 from wallet.wallet import Wallet
 
 

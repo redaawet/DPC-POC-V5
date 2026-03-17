@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 
-from token.token_model import Token
+from digital_token.token_model import Token
 
 
 @dataclass(frozen=True)
