@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from crypto.crypto_utils import verify
 from issuer.issuer import Issuer
-from token.poc_models import PaymentBundle, Token, Transfer
+from digital_token.poc_models import PaymentBundle, Token, Transfer
 
 
 @dataclass

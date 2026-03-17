@@ -2,7 +2,7 @@
 
 from crypto.signatures import generate_keypair, sign_message
 from protocol.cash_payment import execute_cash_payment
-from token.token_model import Token
+from digital_token.token_model import Token
 from wallet.wallet import DictKeyStore, Wallet
 
 

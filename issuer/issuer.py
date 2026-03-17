@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from crypto.crypto_utils import sign
-from token.poc_models import Token
+from digital_token.poc_models import Token
 
 
 class Issuer:

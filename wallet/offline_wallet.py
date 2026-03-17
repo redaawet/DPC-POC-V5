@@ -6,7 +6,7 @@ from typing import Iterable
 
 from crypto.crypto_utils import sign, verify
 from protocol.policy import PolicyConfig, is_not_expired
-from token.poc_models import PaymentBundle, Token, Transfer
+from digital_token.poc_models import PaymentBundle, Token, Transfer
 
 
 class Wallet:

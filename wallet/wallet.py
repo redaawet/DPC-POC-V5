@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 import json
 from typing import Protocol
 
-from token.token_model import Token
-from token.transfer_chain import TransferRecord
+from digital_token.token_model import Token
+from digital_token.transfer_chain import TransferRecord
 
 
 class KeyStore(Protocol):

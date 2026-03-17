@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import json
 
 from crypto.signatures import verify_signature
-from token.transfer_chain import TransferRecord
+from digital_token.transfer_chain import TransferRecord
 
 
 @dataclass
