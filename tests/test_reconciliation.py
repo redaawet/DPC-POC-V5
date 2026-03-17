@@ -15,13 +15,12 @@ def _issued_token(issuer_sk: str, issuer_pk: str, owner_pk: str, *, token_id: st
         token_id=token_id,
         value=100,
         issuer_pk=issuer_pk,
-        current_owner_pk=owner_pk,
+        owner_pk=owner_pk,
         expiry="2030-01-01T00:00:00+00:00",
-        policy={"max_hops": 5},
-        issuer_sig="",
+        issuer_signature="",
         transfer_chain=[],
     )
-    token.issuer_sig = sign_message(issuer_sk, token.issuance_payload())
+    token.issuer_signature = sign_message(issuer_sk, token.issuance_payload())
     return token
 
 

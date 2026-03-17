@@ -34,7 +34,7 @@ class Wallet:
         return sum(token.value for token in self.utr.values())
 
     def select_tokens(self, amount: int) -> list[Token]:
-        """Greedy token selection for a payment amount."""
+        """Greedy token selection for a payment amount (no token splitting)."""
         selected: list[Token] = []
         total = 0
         for token in sorted(self.utr.values(), key=lambda t: t.value):
@@ -44,40 +44,8 @@ class Wallet:
                 return selected
         raise ValueError("Insufficient funds")
 
-    def _split_token(self, token: Token, payment_value: int) -> tuple[Token, Token]:
-        """Split one token into a payment token and a change token."""
-        if payment_value <= 0 or payment_value >= token.value:
-            raise ValueError("Invalid split amount")
-
-        payment_token = Token.new_unsigned(
-            value=payment_value,
-            issuer_pk=token.issuer_pk,
-            owner_pk=self.public_key_hex,
-            nonce=token.nonce,
-        )
-        payment_token.hop_count = token.hop_count
-        payment_token.issuer_signature = token.issuer_signature
-        payment_token.created_at = token.created_at
-        payment_token.origin_token_id = token.origin_token_id
-
-        change_token = Token.new_unsigned(
-            value=token.value - payment_value,
-            issuer_pk=token.issuer_pk,
-            owner_pk=self.public_key_hex,
-            nonce=token.nonce,
-        )
-        change_token.hop_count = token.hop_count
-        change_token.issuer_signature = token.issuer_signature
-        change_token.created_at = token.created_at
-        change_token.origin_token_id = token.origin_token_id
-
-        return payment_token, change_token
-
     def create_payment(self, receiver_pk: str, amount: int) -> PaymentBundle:
-        """Create a signed payment bundle for receiver.
-
-        Moves spent tokens UTR->STR and applies local nonce/hop updates.
-        """
+        """Create a signed payment bundle for receiver using whole tokens only."""
         if amount <= 0:
             raise ValueError("Amount must be positive")
         if amount > self.policy.MAX_TX_VALUE:
@@ -87,39 +55,27 @@ class Wallet:
         transfers: list[Transfer] = []
         outbound_tokens: dict[str, Token] = {}
 
-        remaining = amount
         for token in selected:
-            # Consume selected token from UTR and mark as spent.
             self.utr.pop(token.token_id)
             self.str[token.token_id] = token
 
-            spend_piece = token
-            if remaining < token.value:
-                spend_piece, change_piece = self._split_token(token, remaining)
-                self.receive_token(change_piece)
-
-            spend_piece.owner_pk = receiver_pk
-            spend_piece.hop_count += 1
-            spend_piece.nonce += 1
+            spend_token = deepcopy(token)
+            spend_token.owner_pk = receiver_pk
+            spend_token.hop_count += 1
+            spend_token.nonce += 1
 
             transfer = Transfer.unsigned(
-                token_id=spend_piece.token_id,
+                token_id=spend_token.token_id,
                 sender_pk=self.public_key_hex,
                 receiver_pk=receiver_pk,
-                nonce=spend_piece.nonce,
+                nonce=spend_token.nonce,
                 prev_transfer_id=self.transfer_history.get(token.token_id),
             )
             transfer.signature = sign(transfer.signing_payload(), self.private_key_hex)
 
-            self.transfer_history[spend_piece.token_id] = transfer.transfer_id
+            self.transfer_history[spend_token.token_id] = transfer.transfer_id
             transfers.append(transfer)
-            outbound_tokens[spend_piece.token_id] = spend_piece
-            remaining -= spend_piece.value
-            if remaining == 0:
-                break
-
-        if remaining != 0:
-            raise RuntimeError("Payment assembly failed")
+            outbound_tokens[spend_token.token_id] = spend_token
 
         return PaymentBundle.create(transfers=transfers, tokens=outbound_tokens)
 
