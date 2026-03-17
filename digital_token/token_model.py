@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
+import hashlib
 import json
 
 from crypto.signatures import verify_signature
@@ -69,11 +70,15 @@ class Token:
     def append_transfer(self, sender_sk: str, receiver_pk: str) -> TransferRecord:
         """Append a transfer signed by owner and update owner through the transfer chain."""
         sender_pk = self.owner_pk
+        prev_transfer = self.transfer_chain[-1] if self.transfer_chain else None
+        nonce = 1 if prev_transfer is None else prev_transfer.nonce + 1
         transfer = TransferRecord.create(
             token_id=self.token_id,
             sender_sk=sender_sk,
             sender_pk=sender_pk,
             receiver_pk=receiver_pk,
+            nonce=nonce,
+            previous_transfer=prev_transfer,
         )
         self.transfer_chain.append(transfer)
         self.owner_pk = receiver_pk
@@ -107,6 +112,8 @@ class Token:
         owner_pk = self.owner_pk if not self.transfer_chain else None
         if self.transfer_chain:
             owner_pk = self.transfer_chain[0].sender_pk
+            previous_transfer: TransferRecord | None = None
+            expected_nonce = 1
             for transfer in self.transfer_chain:
                 if transfer.token_id != self.token_id:
                     return False
@@ -114,7 +121,24 @@ class Token:
                     return False
                 if transfer.sender_pk != owner_pk:
                     return False
+                if transfer.nonce != expected_nonce:
+                    return False
+
+                if previous_transfer is None:
+                    if transfer.parent_transfer_id is not None:
+                        return False
+                    if transfer.prev_transfer_hash is not None:
+                        return False
+                else:
+                    if transfer.parent_transfer_id != previous_transfer.transfer_id:
+                        return False
+                    expected_hash = hashlib.sha256(previous_transfer.payload_bytes()).hexdigest()
+                    if transfer.prev_transfer_hash != expected_hash:
+                        return False
+
                 owner_pk = transfer.receiver_pk
+                previous_transfer = transfer
+                expected_nonce += 1
             if owner_pk != self.owner_pk:
                 return False
         return True
