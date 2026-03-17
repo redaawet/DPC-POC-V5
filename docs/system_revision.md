@@ -2,13 +2,52 @@
 
 ## Overview
 
-This revision report audits the repository after refactor and merged pull requests to document what is currently implemented, what architecture exists in practice, how the payment model behaves, and what work remains.
+This report provides an implementation audit of the current DPC repository state. It identifies the production-relevant architecture used for evaluation, distinguishes legacy/experimental paths, and documents implemented security and protocol properties in a thesis-ready format.
 
-The implementation is functional as a proof-of-concept and is split across wallet/protocol/token/issuer/crypto layers, with both a canonical transfer-chain token path and an older/parallel offline bundle path.
+## Canonical Implementation Path
 
----
+Two implementation paths currently coexist in the repository, but only one is treated as the primary architecture for system evaluation.
 
-## 1) Repository Structure Audit
+### Canonical stack used by the system
+
+- **Token layer**
+  - `token/token_model.py`
+  - `token/transfer_chain.py`
+- **Wallet layer**
+  - `wallet/wallet.py`
+- **Protocol layer**
+  - `protocol/payment_session.py`
+  - `protocol/cash_payment.py`
+- **Issuer layer**
+  - `issuer/issuer.py`
+  - `issuer/reconciliation.py`
+
+### Legacy or experimental components (non-canonical)
+
+The following components are retained for experimentation and comparative development, but they are **not required for the main payment protocol**:
+
+- `token/poc_models.py`
+- `wallet/offline_wallet.py`
+- `protocol/network_simulator.py`
+- `issuer/reconciliation_server.py`
+
+## End-to-End System Execution Flow
+
+The canonical payment lifecycle is executed as follows:
+
+1. Issuer mints tokens.
+2. Wallet receives tokens.
+3. Sender selects tokens.
+4. Sender initiates payment session.
+5. Receiver validates tokens.
+6. Receiver calculates change.
+7. Receiver sends change tokens.
+8. Both wallets update state.
+9. Issuer reconciliation later detects double spends.
+
+**Sequence:** `Issuer → Wallet A → Wallet B → Wallet A → Issuer`
+
+## Repository Structure Audit
 
 ### Expected architecture (target)
 
@@ -37,265 +76,118 @@ docs/
 
 ### Notes
 
-- The `dpc/` package namespace is **not present** as a physical directory in the current tree.
-- Core domains are implemented as top-level Python packages (`crypto`, `token`, `wallet`, `protocol`, `issuer`).
-- `mobile/` currently contains a BLE test stub rather than production BLE integration.
+- The `dpc/` namespace is not present as a physical directory.
+- Core domains are implemented as top-level Python packages.
+- `mobile/` currently exposes a BLE stub for testing, not production BLE transport.
 
 ### Module inventory and purpose
 
 - **crypto/**
-  - `crypto_utils.py`: Ed25519 helpers with `cryptography` primary backend and OpenSSL CLI fallback.
+  - `crypto_utils.py`: Ed25519 helpers with `cryptography` backend and OpenSSL CLI fallback.
   - `signatures.py`: Ed25519 key/sign/verify helpers using base64 key material.
 - **token/**
-  - `token_model.py`: canonical token model with immutable identity/value, issuance payload, transfer chain validation.
+  - `token_model.py`: canonical token model with immutable token identity/value and transfer-chain validation.
   - `transfer_chain.py`: transfer record model with deterministic serialization and signatures.
-  - `poc_models.py`: alternate PoC token/transfer/payment-bundle domain models.
+  - `poc_models.py`: alternate PoC token/transfer/payment-bundle models (non-canonical).
 - **wallet/**
-  - `wallet.py`: canonical UTR/STR wallet with token selection, sending/receiving, sync.
-  - `offline_wallet.py`: alternate offline wallet with policy checks and replay-protection for bundles.
+  - `wallet.py`: canonical UTR/STR wallet with token selection, send/receive, and sync.
+  - `offline_wallet.py`: alternate offline wallet with policy checks and replay controls (non-canonical).
 - **protocol/**
-  - `payment_session.py`: atomic cash-like payment session (payment + change + rollback).
+  - `payment_session.py`: atomic payment + change session with rollback.
   - `cash_payment.py`: wrapper for session execution.
-  - `transfer_protocol.py`: two-phase discovery + transfer channel simulation.
-  - `network_simulator.py`: local bundle send helper for offline wallet path.
-  - `policy.py`: policy limits and expiry helper.
+  - `transfer_protocol.py`: two-phase discovery and transfer simulation.
+  - `network_simulator.py`: local bundle send helper for non-canonical path.
+  - `policy.py`: policy limits and expiry utility.
 - **issuer/**
-  - `issuer.py`: issuer minting/signing for PoC tokens.
-  - `reconciliation.py`: reconciliation engine on canonical transfer-chain tokens.
-  - `reconciliation_server.py`: bundle-settlement reconciler with double-spend ledger.
+  - `issuer.py`: issuer minting/signing logic.
+  - `reconciliation.py`: canonical transfer-chain reconciliation.
+  - `reconciliation_server.py`: non-canonical bundle settlement and double-spend checks.
 - **mobile/**
   - `ble_adapter_stub.py`: in-memory BLE adapter stub used by tests.
 - **scripts/**
-  - `run_demo.py`: end-to-end cash-like demo for canonical wallet/session flow.
+  - `run_demo.py`: end-to-end demonstration script for canonical wallet/session flow.
 - **tests/**
-  - Unit/integration tests for crypto, token chain, wallet flows, cash payment, transfer protocol, reconciliation, and BLE stub behaviors.
-- **docs/**
-  - `system_implementation.md`: consolidated implementation summary.
+  - Unit/integration tests for crypto, token chain, wallet behavior, payment sessioning, transfer simulation, reconciliation, and BLE stub interaction.
 
----
+## Implemented Security Properties
 
-## 2) Implemented Features by Component
+- **Token Authenticity**
+  Issuer signatures guarantee that accepted tokens originate from the issuer and are valid.
 
-## Crypto Module
+- **Transfer Authorization**
+  Each transfer must include a valid signature from the previous owner in the transfer chain.
 
-**Location:** `crypto/`
+- **Double Spend Detection**
+  Issuer reconciliation accepts the first valid spend and rejects duplicate subsequent spends.
 
-**Implemented functionality:**
-- Ed25519 key generation.
-- Message signing.
-- Signature verification.
-- Dual backend strategy:
-  - `crypto_utils.py`: `cryptography` preferred, OpenSSL fallback.
-  - `signatures.py`: `cryptography`-based base64 helpers.
+- **Atomic Payment Session**
+  Payment and change exchange occur within a controlled session that supports rollback on failure.
 
-**Key files:**
-- `crypto/crypto_utils.py`
-- `crypto/signatures.py`
+- **Token Integrity**
+  Token value and token ID are immutable after issuance in the canonical token model.
 
-## Token Module
+## Research Contribution Mapping
 
-**Location:** `token/`
+| Thesis Contribution                | Implementation                |
+| ---------------------------------- | ----------------------------- |
+| Offline cash-like digital currency | token_model + wallet transfer |
+| Peer-to-peer payment protocol      | payment_session               |
+| Double-spend detection mechanism   | reconciliation                |
+| Offline payment simulation         | transfer_protocol             |
 
-**Implemented functionality:**
-- Canonical token model (`token_model.Token`) with immutable `token_id` and `value` after init.
-- Issuance payload construction for deterministic signing.
-- Transfer chain append and chain validation with signature continuity checks.
-- Deterministic transfer serialization and signed transfer records.
-- Alternate PoC models for payment bundles (`poc_models.py`).
-
-**Key files:**
-- `token/token_model.py`
-- `token/transfer_chain.py`
-- `token/poc_models.py`
-
-## Wallet Module
-
-**Location:** `wallet/`
-
-**Implemented functionality:**
-- Canonical wallet (`wallet.py`):
-  - UTR/STR storage.
-  - Greedy token selection (`sum >= amount`).
-  - Sending tokens (append transfer, move UTR → STR).
-  - Receiving/validating token payloads.
-  - Atomic receive rollback on failure.
-  - Sync/cleanup of spent register.
-- Cash payment primitives:
-  - `initiate_payment` and `process_payment` (receiver computes change).
-- Alternate offline wallet (`offline_wallet.py`):
-  - Bundle creation.
-  - Replay protection (`processed_transfer_ids`).
-  - Policy checks (max tx, hops, wallet balance, expiry).
-
-**Key files:**
-- `wallet/wallet.py`
-- `wallet/offline_wallet.py`
-
-## Protocol Module
-
-**Location:** `protocol/`
-
-**Implemented functionality:**
-- Atomic payment session orchestration (`PaymentSession.execute`):
-  - sender pays,
-  - receiver validates and computes change,
-  - receiver returns change,
-  - rollback on failure.
-- High-level cash payment wrapper (`execute_cash_payment`).
-- Two-phase transfer protocol simulation:
-  - discovery/open session,
-  - transfer payload exchange.
-- Simulated local communication for bundle path (`network_simulator.send_bundle`).
-- Policy object and expiry utility.
-
-**Key files:**
-- `protocol/payment_session.py`
-- `protocol/cash_payment.py`
-- `protocol/transfer_protocol.py`
-- `protocol/network_simulator.py`
-- `protocol/policy.py`
-
-## Issuer Module
-
-**Location:** `issuer/`
-
-**Implemented functionality:**
-- Token minting and issuer signature (`issuer.py`).
-- Settlement-time validation and double-spend detection:
-  - Canonical chain path (`reconciliation.py`) accepts first valid submission and rejects duplicates.
-  - Bundle path (`reconciliation_server.py`) validates transfer signature, issuer root, and rejects repeated token settlement as `DOUBLE_SPEND`.
-
-**Key files:**
-- `issuer/issuer.py`
-- `issuer/reconciliation.py`
-- `issuer/reconciliation_server.py`
-
----
-
-## 3) Cash-Like Payment Model Verification
-
-### Findings
-
-The implemented canonical flow **does follow** the cash-like model:
-
-- Tokens are treated as bearer objects transferred whole between wallets.
-- Sender chooses existing tokens whose sum covers the price (`select_tokens`), rather than minting split fragments.
-- Receiver computes change (`total - price`) and returns its own tokens back to sender.
-- Session orchestration executes payment + change exchange atomically with rollback support.
-
-### Example behavior in system
-
-- Sender → Receiver: payment tokens covering amount.
-- Receiver → Sender: change tokens from receiver wallet.
-
-### Token-splitting check
-
-No explicit token value-splitting function is implemented in the canonical `token_model` + `wallet` + `payment_session` path.
-
-**Conclusion:** No direct token splitting detected in the canonical flow.
-
----
-
-## 4) Test Coverage Review
+## Test Coverage Review
 
 ### Present test modules
 
 - `tests/test_crypto.py`
 - `tests/test_token.py`
-- `tests/test_wallet_flow.py` *(note: expected name `test_wallet.py` not present)*
+- `tests/test_wallet_flow.py`
 - `tests/test_cash_payment.py`
 - `tests/test_reconciliation.py`
 - `tests/test_transfer_protocol.py`
 - `tests/test_offline_cbdc_poc.py`
 - `tests/mobile/test_ble_flow.py`
 
-### What each verifies
+### Coverage summary
 
-- **test_crypto.py**
-  - Ed25519 sign/verify success path.
-  - Verification failure with wrong public key.
+- Crypto signing and verification behavior.
+- Token issuance and transfer-chain validation, including tamper rejection.
+- Wallet UTR/STR lifecycle and atomic receive rollback.
+- Cash-like payment flow with change return.
+- Reconciliation first-spend acceptance and duplicate rejection.
+- Simulated transfer protocol behavior.
+- Legacy offline bundle flow behavior.
+- BLE stub messaging handshake.
 
-- **test_token.py**
-  - Token issuance signature + transfer-chain validation.
-  - Rejection when transfer chain is tampered.
+## Remaining Work
 
-- **test_wallet_flow.py**
-  - UTR/STR lifecycle (add/send/receive/sync).
-  - Atomic receive rollback when payload validation fails.
+- Unify namespace architecture under a single `dpc/` package.
+- Remove ambiguity between canonical and legacy stacks through explicit module deprecation or isolation.
+- Add production BLE transport integration.
+- Add secure key storage (hardware-backed or encrypted-at-rest).
+- Add privacy-preserving transfer mechanisms.
+- Add multi-hop routing/pathfinding.
 
-- **test_cash_payment.py**
-  - Cash-like payment with receiver returning change.
-  - Final wallet balances/tokens after payment.
+## System Maturity Level
 
-- **test_reconciliation.py**
-  - Reconciliation accepts first valid spend and rejects second duplicate spend.
+**Research Prototype**
 
-- **test_transfer_protocol.py**
-  - Two-phase channel transfer simulation from sender wallet to receiver wallet.
+The system demonstrates feasibility of offline digital cash using transfer-chain tokens, but it does not yet include production-grade infrastructure such as secure hardware key storage, real BLE networking, or privacy-preserving transaction mechanisms.
 
-- **test_offline_cbdc_poc.py**
-  - Alternate offline/bundle stack:
-    - sign/verify roundtrip,
-    - whole-token bundle payment behavior,
-    - replay rejection,
-    - expiry rejection,
-    - reconciliation double-spend detection.
+## Implementation Status Table
 
-- **tests/mobile/test_ble_flow.py**
-  - BLE stub connection and message exchange handshake.
+| Component                  | Status          |
+| -------------------------- | --------------- |
+| Cryptographic primitives   | Completed       |
+| Token transfer-chain model | Completed       |
+| Wallet engine              | Completed       |
+| Cash-like payment protocol | Completed       |
+| Issuer reconciliation      | Completed       |
+| Offline payment simulation | Completed       |
+| BLE transport layer        | Prototype       |
+| Privacy protection         | Not implemented |
+| Multi-hop routing          | Not implemented |
 
----
+## Summary
 
-## 5) Remaining Work
-
-The following items are incomplete, partial, or absent in the current repository:
-
-- **Unified package architecture (`dpc/`)**
-  - Expected namespace/package root not yet implemented.
-
-- **Single canonical model enforcement**
-  - Two parallel stacks still coexist (`token_model`/`wallet.py` and `poc_models`/`offline_wallet.py`).
-
-- **Atomic payment sessions across all paths**
-  - Canonical cash session is atomic, but bundle/offline path does not implement equivalent two-way atomic payment+change sessioning.
-
-- **Rollback protection consistency**
-  - Rollback exists in canonical `PaymentSession` and `Wallet.receive_token`; not uniformly formalized across all flows.
-
-- **Multi-hop transfer routing**
-  - No route discovery/pathfinding; only direct peer transfer simulation.
-
-- **BLE integration (production-grade)**
-  - Only in-memory BLE stub exists; no real Bluetooth transport integration.
-
-- **Secure key storage**
-  - Keys are held in memory/test keystores; no hardware-backed or encrypted-at-rest key management.
-
-- **Privacy mechanisms**
-  - No anonymity/privacy-preserving protocol layer (e.g., unlinkability, blinded credentials, private transfer metadata).
-
-- **Dependency robustness in CI/runtime**
-  - Most tests rely on `cryptography`; when absent, major suites are skipped.
-
----
-
-## 6) Implementation Status Table
-
-| Component               | Status      |
-| ----------------------- | ----------- |
-| Repository Architecture | Implemented |
-| Token Model             | Completed   |
-| Crypto Infrastructure   | Completed   |
-| Wallet Engine           | Implemented |
-| Payment Protocol        | Implemented |
-| Cash-Like Payment Model | Implemented |
-| Issuer Reconciliation   | Implemented |
-| Simulated Channel       | Implemented |
-| Demo Script             | Implemented |
-| Automated Tests         | Implemented |
-
----
-
-## 7) Summary
-
-The repository currently implements a working offline-CBDC proof-of-concept with clear core capabilities: signed bearer tokens, transfer-chain validation, wallet transfer handling, cash-like change return, and reconciliation with double-spend detection. The primary gaps are architectural unification, production-grade transport/security, and advanced protocol features.
+The repository contains a functional canonical implementation for evaluation: transfer-chain tokens, wallet transfer handling, atomic payment-with-change sessions, and issuer-side reconciliation. Legacy modules remain available for experimentation but are not part of the primary system path.
