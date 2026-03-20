@@ -21,12 +21,15 @@ class Wallet:
         self.utr: dict[str, Token] = {}
         self.str: dict[str, Token] = {}
         self.transfer_history: dict[str, str | None] = {}
+        self.transfer_hashes: dict[str, str] = {}
         self.processed_transfer_ids: set[str] = set()
 
     def receive_token(self, token: Token) -> None:
         """Receive an unspent token into UTR with balance-cap policy enforcement."""
-        if self.balance() + token.value > self.policy.MAX_WALLET_BALANCE:
-            raise ValueError("MAX_WALLET_BALANCE exceeded")
+        if token.current_owner != self.public_key_hex:
+            raise ValueError("token owner mismatch")
+        if self.balance() + token.value > self.policy.MAX_BALANCE:
+            raise ValueError("MAX_BALANCE exceeded")
         self.utr[token.token_id] = deepcopy(token)
 
     def balance(self) -> int:
@@ -60,8 +63,7 @@ class Wallet:
             self.str[token.token_id] = token
 
             spend_token = deepcopy(token)
-            spend_token.owner_pk = receiver_pk
-            spend_token.hop_count += 1
+            spend_token.current_owner = receiver_pk
             spend_token.nonce += 1
 
             transfer = Transfer.unsigned(
@@ -69,11 +71,12 @@ class Wallet:
                 sender_pk=self.public_key_hex,
                 receiver_pk=receiver_pk,
                 nonce=spend_token.nonce,
-                prev_transfer_id=self.transfer_history.get(token.token_id),
+                parent_transfer_id=token.last_transfer_id,
+                prev_transfer_hash=self.transfer_hashes.get(token.last_transfer_id, None),
+                hop_count=token.hop_count + 1,
             )
             transfer.signature = sign(transfer.signing_payload(), self.private_key_hex)
 
-            self.transfer_history[spend_token.token_id] = transfer.transfer_id
             transfers.append(transfer)
             outbound_tokens[spend_token.token_id] = spend_token
 
@@ -85,7 +88,12 @@ class Wallet:
             return False
         if transfer.receiver_pk != self.public_key_hex:
             return False
-        if token.hop_count > self.policy.MAX_TOKEN_HOPS:
+        if transfer.hop_count > self.policy.MAX_HOPS:
+            return False
+        if transfer.parent_transfer_id != token.last_transfer_id:
+            return False
+        expected_prev_hash = self.transfer_hashes.get(token.last_transfer_id, None)
+        if transfer.prev_transfer_hash != expected_prev_hash:
             return False
         if not is_not_expired(token.created_at, self.policy.TOKEN_EXPIRY_SECONDS):
             return False
@@ -97,10 +105,17 @@ class Wallet:
         """Apply verified transfer into wallet state."""
         if not self.verify_transfer(transfer, token):
             return False
-        if self.balance() + token.value > self.policy.MAX_WALLET_BALANCE:
+        if self.balance() + token.value > self.policy.MAX_BALANCE:
             return False
-        self.utr[token.token_id] = deepcopy(token)
+
+        received = deepcopy(token)
+        received.current_owner = self.public_key_hex
+        received.last_transfer_id = transfer.transfer_id
+        received.hop_count += 1
+
+        self.utr[token.token_id] = received
         self.transfer_history[token.token_id] = transfer.transfer_id
+        self.transfer_hashes[transfer.transfer_id] = transfer.payload_hash()
         self.processed_transfer_ids.add(transfer.transfer_id)
         return True
 
