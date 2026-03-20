@@ -11,7 +11,8 @@ A Python 3.10+ proof-of-concept for offline CBDC bearer-token payments between w
 ## Modules
 
 - `crypto/crypto_utils.py` - Ed25519 key generation/sign/verify.
-- `token/poc_models.py` - Token, Transfer, PaymentBundle models.
+- `digital_token/poc_models.py` - Token, Transfer, PaymentBundle models.
+- `dpc_models.py` - compatibility exports for `Policy`, `Token`, `Transfer`, `PaymentBundle`.
 - `wallet/offline_wallet.py` - UTR/STR wallet logic, payment creation, replay protection.
 - `issuer/issuer.py` - Central bank simulator minting signed root tokens.
 - `protocol/policy.py` - configurable policy caps.
@@ -23,6 +24,60 @@ A Python 3.10+ proof-of-concept for offline CBDC bearer-token payments between w
 
 ```bash
 python main_demo.py
+```
+
+## How to test the system (step-by-step)
+
+### 1) Environment setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install cryptography pytest
+```
+
+### 2) Run all automated tests
+
+```bash
+pytest -q
+```
+
+If `cryptography` is missing, some test modules are intentionally skipped.
+
+### 3) Run only the Offline CBDC PoC tests
+
+```bash
+pytest -q tests/test_offline_cbdc_poc.py
+```
+
+### 4) Run the interactive/demo flow
+
+```bash
+python main_demo.py
+```
+
+This shows issuance, offline payment hops, policy-based rejections, and settlement results.
+
+## How to use the PoC for lost-device recovery (T9 flow)
+
+This is the practical sequence to validate the “report lost → wait settlement window → recover safe balance” workflow:
+
+1. **Mint funds to Alice** (e.g., `5 x 100` ETB tokens).
+2. **Alice pays Bob offline** (e.g., `100` ETB).
+3. **Bob syncs** the received token bundle to the reconciliation server.
+4. **Alice reports device loss** by calling `revoke_wallet(alice_public_key)`.
+5. Wait until: `current_time > revocation_time + TOKEN_TTL_SECONDS` (1 week).
+6. Reconstruct recoverable value:
+   - `issued_total - claimed_total = safe_balance`
+   - via `reconstruct_recovery(alice_public_key)`.
+7. Reissue recovered value to Alice’s new key using:
+   - `reissue_recovered_balance(old_alice_pk, new_alice_pk, at_time=...)`.
+
+### Commands to run recovery-focused tests
+
+```bash
+pytest -q tests/test_offline_cbdc_poc.py -k "t9 or recovery or revoked"
 ```
 
 ## Features implemented
