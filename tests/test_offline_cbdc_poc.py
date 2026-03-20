@@ -98,3 +98,88 @@ def test_reconciliation_detects_double_spend() -> None:
 
     assert first[0].status == "ACCEPTED"
     assert second[0].status == "DOUBLE_SPEND"
+
+
+def test_t8_wallet_rejects_payment_above_max_balance() -> None:
+    policy = PolicyConfig(MAX_TX_VALUE=1_000, MAX_TOKEN_HOPS=7, MAX_WALLET_BALANCE=10_000, TOKEN_EXPIRY_SECONDS=604800)
+    issuer_sk, issuer_pk = generate_keypair()
+    issuer = Issuer(issuer_sk, issuer_pk)
+
+    payer = make_wallet("Payer", policy)
+    receiver = make_wallet("Receiver", policy)
+
+    receiver.receive_token(issuer.mint_token(owner_pk=receiver.public_key_hex, value=9_500))
+    payer.receive_token(issuer.mint_token(owner_pk=payer.public_key_hex, value=1_000))
+
+    bundle = payer.create_payment(receiver_pk=receiver.public_key_hex, amount=1_000)
+    results = receiver.receive_payment(bundle)
+
+    assert results[0][1] is False
+    assert results[0][2] == "MAX_BALANCE_EXCEEDED"
+
+
+def test_t9_lost_device_recovery_reissues_safe_balance() -> None:
+    policy = PolicyConfig(MAX_TX_VALUE=1_000, MAX_TOKEN_HOPS=7, MAX_WALLET_BALANCE=10_000, TOKEN_EXPIRY_SECONDS=604800)
+    issuer_sk, issuer_pk = generate_keypair()
+    issuer = Issuer(issuer_sk, issuer_pk)
+    server = ReconciliationServer(issuer, policy=policy)
+
+    alice_sk, alice_pk = generate_keypair()
+    bob_sk, bob_pk = generate_keypair()
+    alice = Wallet("Alice", alice_sk, alice_pk, policy)
+    bob = Wallet("Bob", bob_sk, bob_pk, policy)
+
+    for _ in range(5):
+        alice.receive_token(issuer.mint_token(owner_pk=alice.public_key_hex, value=100))
+
+    bundle = alice.create_payment(receiver_pk=bob.public_key_hex, amount=100)
+    receive_results = bob.receive_payment(bundle)
+    assert receive_results[0][1] is True
+
+    # Bob syncs his token to the server.
+    settlement = server.process_bundle(bundle)
+    assert settlement[0].status == "ACCEPTED"
+
+    # Alice loses device and revokes old wallet.
+    server.revoke_wallet(alice.public_key_hex)
+
+    # Recovery before TTL should fail.
+    with pytest.raises(ValueError, match="RECOVERY_WAIT_NOT_ELAPSED"):
+        server.reissue_recovered_balance(alice.public_key_hex, new_public_key=generate_keypair()[1])
+
+    # One week passes in simulation.
+    after_wait = datetime.now(tz=timezone.utc) + timedelta(seconds=policy.TOKEN_EXPIRY_SECONDS + 1)
+    new_alice_sk, new_alice_pk = generate_keypair()
+    recovered = server.reissue_recovered_balance(alice.public_key_hex, new_alice_pk, at_time=after_wait)
+
+    assert sum(token.value for token in recovered) == 400
+
+
+def test_recovery_subtracts_tokens_settled_after_additional_hops() -> None:
+    policy = PolicyConfig(MAX_TX_VALUE=1_000, MAX_TOKEN_HOPS=7, MAX_WALLET_BALANCE=10_000, TOKEN_EXPIRY_SECONDS=604800)
+    issuer_sk, issuer_pk = generate_keypair()
+    issuer = Issuer(issuer_sk, issuer_pk)
+    server = ReconciliationServer(issuer, policy=policy)
+
+    alice_sk, alice_pk = generate_keypair()
+    bob_sk, bob_pk = generate_keypair()
+    charlie_sk, charlie_pk = generate_keypair()
+    alice = Wallet("Alice", alice_sk, alice_pk, policy)
+    bob = Wallet("Bob", bob_sk, bob_pk, policy)
+    charlie = Wallet("Charlie", charlie_sk, charlie_pk, policy)
+
+    for _ in range(5):
+        alice.receive_token(issuer.mint_token(owner_pk=alice.public_key_hex, value=100))
+
+    bundle_ab = alice.create_payment(receiver_pk=bob.public_key_hex, amount=100)
+    assert bob.receive_payment(bundle_ab)[0][1] is True
+    bundle_bc = bob.create_payment(receiver_pk=charlie.public_key_hex, amount=100)
+    assert charlie.receive_payment(bundle_bc)[0][1] is True
+    assert server.process_bundle(bundle_bc)[0].status == "ACCEPTED"
+
+    server.revoke_wallet(alice.public_key_hex)
+    after_wait = datetime.now(tz=timezone.utc) + timedelta(seconds=policy.TOKEN_EXPIRY_SECONDS + 1)
+    _new_alice_sk, new_alice_pk = generate_keypair()
+    recovered = server.reissue_recovered_balance(alice.public_key_hex, new_alice_pk, at_time=after_wait)
+
+    assert sum(token.value for token in recovered) == 400
