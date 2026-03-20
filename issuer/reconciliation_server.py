@@ -42,7 +42,6 @@ class ReconciliationServer:
         results: list[SettlementRecord] = []
         for transfer in bundle.transfers:
             token = bundle.tokens[transfer.token_id]
-            expected_prev_hash = self.transfer_hashes.get(token.last_transfer_id, None)
             chain_key = (transfer.parent_transfer_id, transfer.prev_transfer_hash, transfer.hop_count)
 
             if not self._verify_transfer(transfer):
@@ -53,7 +52,14 @@ class ReconciliationServer:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "MAX_HOPS_EXCEEDED")
             elif transfer.parent_transfer_id != token.last_transfer_id:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "BROKEN_PARENT_LINK")
-            elif transfer.prev_transfer_hash != expected_prev_hash:
+            elif transfer.parent_transfer_id is None and transfer.prev_transfer_hash is not None:
+                rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "BROKEN_HASH_LINK")
+            elif transfer.parent_transfer_id is not None and transfer.parent_transfer_id not in self.transfer_hashes:
+                rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "BROKEN_PARENT_LINK")
+            elif (
+                transfer.parent_transfer_id is not None
+                and transfer.prev_transfer_hash != self.transfer_hashes[transfer.parent_transfer_id]
+            ):
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "BROKEN_HASH_LINK")
             elif token.token_id in self.accepted_chains and self.accepted_chains[token.token_id] != chain_key:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "DOUBLE_SPEND", "CONFLICTING_CHAIN")

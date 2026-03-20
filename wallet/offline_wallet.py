@@ -92,8 +92,12 @@ class Wallet:
             return False
         if transfer.parent_transfer_id != token.last_transfer_id:
             return False
-        expected_prev_hash = self.transfer_hashes.get(token.last_transfer_id, None)
-        if transfer.prev_transfer_hash != expected_prev_hash:
+        # The receiving wallet cannot reliably validate a non-root parent hash
+        # because it may never have observed the parent transfer locally
+        # (e.g., Alice -> Bob -> Carol where Carol never saw Alice -> Bob).
+        # Only enforce root-shape consistency here; canonical hash-link
+        # validation is performed by reconciliation against global history.
+        if token.last_transfer_id is None and transfer.prev_transfer_hash is not None:
             return False
         if not is_not_expired(token.created_at, self.policy.TOKEN_EXPIRY_SECONDS):
             return False
