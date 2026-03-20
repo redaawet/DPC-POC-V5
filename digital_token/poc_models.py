@@ -23,6 +23,7 @@ class Token:
     nonce: int
     issuer_signature: str
     last_transfer_id: str | None = None
+    last_transfer_hash: str | None = None
     hop_count: int = 0
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     origin_token_id: str | None = None

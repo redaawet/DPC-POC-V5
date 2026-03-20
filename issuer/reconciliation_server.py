@@ -42,7 +42,7 @@ class ReconciliationServer:
         results: list[SettlementRecord] = []
         for transfer in bundle.transfers:
             token = bundle.tokens[transfer.token_id]
-            expected_prev_hash = self.transfer_hashes.get(token.last_transfer_id, None)
+            expected_prev_hash = token.last_transfer_hash
             chain_key = (transfer.parent_transfer_id, transfer.prev_transfer_hash, transfer.hop_count)
 
             if not self._verify_transfer(transfer):
