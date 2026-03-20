@@ -42,9 +42,16 @@ class RecoveryEngine:
 class ReconciliationServer:
     """Validates bundles, detects double spends, and keeps settlement ledger."""
 
-    def __init__(self, issuer: Issuer, policy: PolicyConfig | None = None) -> None:
+    def __init__(
+        self,
+        issuer: Issuer,
+        policy: PolicyConfig | None = None,
+        *,
+        now_fn: Callable[[], datetime] | None = None,
+    ) -> None:
         self.issuer = issuer
         self.policy = policy or PolicyConfig()
+        self.now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
         self.ledger: dict[str, SettlementRecord] = {}
         self.accepted_chains: dict[str, tuple[str | None, str | None, int]] = {}
         self.transfer_hashes: dict[str, str] = {}
