@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Iterable
 
 from crypto.crypto_utils import sign, verify
-from protocol.policy import PolicyConfig, is_not_expired
+from protocol.policy import PolicyConfig, PolicyError, is_not_expired
 from digital_token.poc_models import PaymentBundle, Token, Transfer
 
 
@@ -23,6 +24,7 @@ class Wallet:
         self.transfer_history: dict[str, str | None] = {}
         self.transfer_hashes: dict[str, str] = {}
         self.processed_transfer_ids: set[str] = set()
+        self.sync_required: dict[str, str] = {}
 
     def receive_token(self, token: Token) -> None:
         """Receive an unspent token into UTR with balance-cap policy enforcement."""
@@ -52,9 +54,15 @@ class Wallet:
         if amount <= 0:
             raise ValueError("Amount must be positive")
         if amount > self.policy.MAX_TX_VALUE:
-            raise ValueError("MAX_TX_VALUE exceeded")
+            raise PolicyError("MAX_TX_VALUE exceeded")
 
-        selected = self.select_tokens(amount)
+        now_epoch = int(datetime.now(tz=timezone.utc).timestamp())
+        spendable = [
+            token
+            for token in self.utr.values()
+            if self._is_token_spendable(token, now_epoch=now_epoch)
+        ]
+        selected = self.select_tokens_from_pool(spendable, amount)
         transfers: list[Transfer] = []
         outbound_tokens: dict[str, Token] = {}
 
@@ -72,6 +80,7 @@ class Wallet:
                 receiver_pk=receiver_pk,
                 nonce=spend_token.nonce,
                 parent_transfer_id=token.last_transfer_id,
+                parent_transfer_hash=token.last_transfer_hash,
                 prev_transfer_hash=token.last_transfer_hash,
                 hop_count=token.hop_count + 1,
             )
@@ -82,6 +91,27 @@ class Wallet:
 
         return PaymentBundle.create(transfers=transfers, tokens=outbound_tokens)
 
+    def select_tokens_from_pool(self, pool: list[Token], amount: int) -> list[Token]:
+        """Greedy token selection from a constrained token pool."""
+        selected: list[Token] = []
+        total = 0
+        for token in sorted(pool, key=lambda t: t.value):
+            selected.append(token)
+            total += token.value
+            if total >= amount:
+                return selected
+        raise ValueError("Insufficient spendable funds")
+
+    def _is_token_spendable(self, token: Token, *, now_epoch: int) -> bool:
+        """Check whether token can be used for an offline transfer."""
+        expired = now_epoch - token.issue_timestamp > self.policy.TOKEN_EXPIRY_SECONDS
+        maxed_hops = token.nonce >= self.policy.MAX_HOPS
+        if expired or maxed_hops:
+            reason = "TOKEN_EXPIRED" if expired else "MAX_HOPS_EXCEEDED"
+            self.sync_required[token.token_id] = reason
+            return False
+        return True
+
     def verify_transfer_with_reason(self, transfer: Transfer, token: Token) -> tuple[bool, str]:
         """Verify transfer signature and policy constraints with explicit rejection reason."""
         if transfer.transfer_id in self.processed_transfer_ids:
@@ -90,12 +120,19 @@ class Wallet:
             return False, "WRONG_RECEIVER"
         if transfer.hop_count > self.policy.MAX_HOPS:
             return False, "MAX_HOPS_EXCEEDED"
+        if transfer.nonce > self.policy.MAX_HOPS:
+            return False, "MAX_HOPS_EXCEEDED"
         if transfer.parent_transfer_id != token.last_transfer_id:
             return False, "BROKEN_PARENT_LINK"
+        if transfer.parent_transfer_hash != token.last_transfer_hash:
+            return False, "BROKEN_PARENT_HASH_LINK"
         expected_prev_hash = token.last_transfer_hash
         if transfer.prev_transfer_hash != expected_prev_hash:
             return False, "BROKEN_HASH_LINK"
         if not is_not_expired(token.created_at, self.policy.TOKEN_EXPIRY_SECONDS):
+            return False, "TOKEN_EXPIRED"
+        now_epoch = int(datetime.now(tz=timezone.utc).timestamp())
+        if now_epoch - token.issue_timestamp > self.policy.TOKEN_EXPIRY_SECONDS:
             return False, "TOKEN_EXPIRED"
         if not verify(transfer.signing_payload(), transfer.signature, transfer.sender_pk):
             return False, "BAD_TRANSFER_SIG"
@@ -139,6 +176,32 @@ class Wallet:
             ok = self.apply_transfer(transfer, token)
             results.append((transfer.transfer_id, ok))
         return results
+
+    def receive_payment(self, bundle: PaymentBundle) -> list[tuple[str, bool, str]]:
+        """Receiver-side enforcement entrypoint for full bundle validation."""
+        staged: list[tuple[Transfer, Token]] = []
+        failure_reason: str | None = None
+
+        for transfer in bundle.transfers:
+            token = bundle.tokens[transfer.token_id]
+            ok, reason = self.verify_transfer_with_reason(transfer, token)
+            if not ok:
+                failure_reason = reason
+                break
+            staged.append((transfer, token))
+
+        incoming_value = sum(token.value for _, token in staged)
+        if failure_reason is None and self.balance() + incoming_value > self.policy.MAX_BALANCE:
+            failure_reason = "MAX_BALANCE_EXCEEDED"
+
+        if failure_reason is not None:
+            return [(transfer.transfer_id, False, failure_reason) for transfer in bundle.transfers]
+
+        accepted: list[tuple[str, bool, str]] = []
+        for transfer, token in staged:
+            ok, reason = self.apply_transfer_with_reason(transfer, token)
+            accepted.append((transfer.transfer_id, ok, reason))
+        return accepted
 
     def receive_bundle_with_reasons(self, bundle: PaymentBundle) -> list[tuple[str, bool, str]]:
         """Apply all transfers and provide explicit accept/reject reasons."""

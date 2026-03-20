@@ -5,11 +5,21 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import time
 import uuid
 
 
 def _canonical_json(payload: dict) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+class Policy:
+    """Global policy constants for the DPC proof-of-concept."""
+
+    MAX_OFFLINE_HOPS = 7
+    TOKEN_TTL_SECONDS = 604800
+    MAX_WALLET_BALANCE = 10000
+    MAX_TRANSACTION_VALUE = 1000
 
 
 @dataclass
@@ -25,6 +35,7 @@ class Token:
     last_transfer_id: str | None = None
     last_transfer_hash: str | None = None
     hop_count: int = 0
+    issue_timestamp: int = field(default_factory=lambda: int(time.time()))
     created_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     origin_token_id: str | None = None
 
@@ -51,6 +62,7 @@ class Token:
                 "issuer_pk": self.issuer_pk,
                 "owner_pk": self.current_owner,
                 "nonce": self.nonce,
+                "issue_timestamp": self.issue_timestamp,
                 "origin_token_id": self.origin_token_id,
             }
         )
@@ -75,6 +87,7 @@ class Transfer:
     receiver_pk: str
     nonce: int
     parent_transfer_id: str | None
+    parent_transfer_hash: str | None
     prev_transfer_hash: str | None
     hop_count: int
     signature: str
@@ -87,6 +100,7 @@ class Transfer:
         receiver_pk: str,
         nonce: int,
         parent_transfer_id: str | None,
+        parent_transfer_hash: str | None,
         prev_transfer_hash: str | None,
         hop_count: int,
     ) -> "Transfer":
@@ -97,6 +111,7 @@ class Transfer:
             receiver_pk=receiver_pk,
             nonce=nonce,
             parent_transfer_id=parent_transfer_id,
+            parent_transfer_hash=parent_transfer_hash,
             prev_transfer_hash=prev_transfer_hash,
             hop_count=hop_count,
             signature="",
@@ -113,6 +128,7 @@ class Transfer:
                 "receiver_pk": self.receiver_pk,
                 "nonce": self.nonce,
                 "parent_transfer_id": self.parent_transfer_id,
+                "parent_transfer_hash": self.parent_transfer_hash,
                 "prev_transfer_hash": self.prev_transfer_hash,
                 "hop_count": self.hop_count,
                 "timestamp": self.timestamp.isoformat(),
@@ -129,6 +145,7 @@ class Transfer:
                 "receiver_pk": self.receiver_pk,
                 "nonce": self.nonce,
                 "parent_transfer_id": self.parent_transfer_id,
+                "parent_transfer_hash": self.parent_transfer_hash,
                 "prev_transfer_hash": self.prev_transfer_hash,
                 "hop_count": self.hop_count,
                 "timestamp": self.timestamp.isoformat(),
