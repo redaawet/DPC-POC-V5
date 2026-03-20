@@ -24,7 +24,7 @@ class Wallet:
         self.transfer_history: dict[str, str | None] = {}
         self.transfer_hashes: dict[str, str] = {}
         self.processed_transfer_ids: set[str] = set()
-        self.sync_required: set[str] = set()
+        self.sync_required: dict[str, str] = {}
 
     def receive_token(self, token: Token) -> None:
         """Receive an unspent token into UTR with balance-cap policy enforcement."""
@@ -107,7 +107,8 @@ class Wallet:
         expired = now_epoch - token.issue_timestamp > self.policy.TOKEN_EXPIRY_SECONDS
         maxed_hops = token.nonce >= self.policy.MAX_HOPS
         if expired or maxed_hops:
-            self.sync_required.add(token.token_id)
+            reason = "TOKEN_EXPIRED" if expired else "MAX_HOPS_EXCEEDED"
+            self.sync_required[token.token_id] = reason
             return False
         return True
 
@@ -178,7 +179,29 @@ class Wallet:
 
     def receive_payment(self, bundle: PaymentBundle) -> list[tuple[str, bool, str]]:
         """Receiver-side enforcement entrypoint for full bundle validation."""
-        return self.receive_bundle_with_reasons(bundle)
+        staged: list[tuple[Transfer, Token]] = []
+        failure_reason: str | None = None
+
+        for transfer in bundle.transfers:
+            token = bundle.tokens[transfer.token_id]
+            ok, reason = self.verify_transfer_with_reason(transfer, token)
+            if not ok:
+                failure_reason = reason
+                break
+            staged.append((transfer, token))
+
+        incoming_value = sum(token.value for _, token in staged)
+        if failure_reason is None and self.balance() + incoming_value > self.policy.MAX_BALANCE:
+            failure_reason = "MAX_BALANCE_EXCEEDED"
+
+        if failure_reason is not None:
+            return [(transfer.transfer_id, False, failure_reason) for transfer in bundle.transfers]
+
+        accepted: list[tuple[str, bool, str]] = []
+        for transfer, token in staged:
+            ok, reason = self.apply_transfer_with_reason(transfer, token)
+            accepted.append((transfer.transfer_id, ok, reason))
+        return accepted
 
     def receive_bundle_with_reasons(self, bundle: PaymentBundle) -> list[tuple[str, bool, str]]:
         """Apply all transfers and provide explicit accept/reject reasons."""
