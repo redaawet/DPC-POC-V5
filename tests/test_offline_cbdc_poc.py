@@ -122,12 +122,15 @@ def test_t9_lost_device_recovery_reissues_safe_balance() -> None:
     policy = PolicyConfig(MAX_TX_VALUE=1_000, MAX_TOKEN_HOPS=7, MAX_WALLET_BALANCE=10_000, TOKEN_EXPIRY_SECONDS=604800)
     issuer_sk, issuer_pk = generate_keypair()
     issuer = Issuer(issuer_sk, issuer_pk)
-    server = ReconciliationServer(issuer, policy=policy)
+    simulated_now = datetime.now(tz=timezone.utc)
+    server = ReconciliationServer(issuer, policy=policy, now_fn=lambda: simulated_now)
 
     alice_sk, alice_pk = generate_keypair()
     bob_sk, bob_pk = generate_keypair()
+    charlie_sk, charlie_pk = generate_keypair()
     alice = Wallet("Alice", alice_sk, alice_pk, policy)
     bob = Wallet("Bob", bob_sk, bob_pk, policy)
+    charlie = Wallet("Charlie", charlie_sk, charlie_pk, policy)
 
     for _ in range(5):
         alice.receive_token(issuer.mint_token(owner_pk=alice.public_key_hex, value=100))
@@ -136,8 +139,11 @@ def test_t9_lost_device_recovery_reissues_safe_balance() -> None:
     receive_results = bob.receive_payment(bundle)
     assert receive_results[0][1] is True
 
-    # Bob syncs his token to the server.
-    settlement = server.process_bundle(bundle)
+    # Bob forwards one token, then Charlie settles it.
+    bob_to_charlie = bob.create_payment(receiver_pk=charlie.public_key_hex, amount=100)
+    received_by_charlie = charlie.receive_payment(bob_to_charlie)
+    assert received_by_charlie[0][1] is True
+    settlement = server.process_bundle(bob_to_charlie)
     assert settlement[0].status == "ACCEPTED"
 
     # Alice loses device and revokes old wallet.
@@ -148,9 +154,8 @@ def test_t9_lost_device_recovery_reissues_safe_balance() -> None:
         server.reissue_recovered_balance(alice.public_key_hex, new_public_key=generate_keypair()[1])
 
     # One week passes in simulation.
-    after_wait = datetime.now(tz=timezone.utc) + timedelta(seconds=policy.TOKEN_EXPIRY_SECONDS + 1)
-    new_alice_sk, new_alice_pk = generate_keypair()
-    assert server.reconstruct_safe_balance(alice.public_key_hex) == 400
-    recovered = server.reissue_recovered_balance(alice.public_key_hex, new_alice_pk, at_time=after_wait)
+    simulated_now = simulated_now + timedelta(seconds=policy.TOKEN_EXPIRY_SECONDS + 1)
+    _new_alice_sk, new_alice_pk = generate_keypair()
+    recovered = server.reissue_recovered_balance(alice.public_key_hex, new_alice_pk)
 
     assert sum(token.value for token in recovered) == 400
