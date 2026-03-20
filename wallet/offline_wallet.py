@@ -21,12 +21,15 @@ class Wallet:
         self.utr: dict[str, Token] = {}
         self.str: dict[str, Token] = {}
         self.transfer_history: dict[str, str | None] = {}
+        self.transfer_hashes: dict[str, str] = {}
         self.processed_transfer_ids: set[str] = set()
 
     def receive_token(self, token: Token) -> None:
         """Receive an unspent token into UTR with balance-cap policy enforcement."""
-        if self.balance() + token.value > self.policy.MAX_WALLET_BALANCE:
-            raise ValueError("MAX_WALLET_BALANCE exceeded")
+        if token.current_owner != self.public_key_hex:
+            raise ValueError("token owner mismatch")
+        if self.balance() + token.value > self.policy.MAX_BALANCE:
+            raise ValueError("MAX_BALANCE exceeded")
         self.utr[token.token_id] = deepcopy(token)
 
     def balance(self) -> int:
@@ -60,8 +63,7 @@ class Wallet:
             self.str[token.token_id] = token
 
             spend_token = deepcopy(token)
-            spend_token.owner_pk = receiver_pk
-            spend_token.hop_count += 1
+            spend_token.current_owner = receiver_pk
             spend_token.nonce += 1
 
             transfer = Transfer.unsigned(
@@ -69,40 +71,65 @@ class Wallet:
                 sender_pk=self.public_key_hex,
                 receiver_pk=receiver_pk,
                 nonce=spend_token.nonce,
-                prev_transfer_id=self.transfer_history.get(token.token_id),
+                parent_transfer_id=token.last_transfer_id,
+                prev_transfer_hash=token.last_transfer_hash,
+                hop_count=token.hop_count + 1,
             )
             transfer.signature = sign(transfer.signing_payload(), self.private_key_hex)
 
-            self.transfer_history[spend_token.token_id] = transfer.transfer_id
             transfers.append(transfer)
             outbound_tokens[spend_token.token_id] = spend_token
 
         return PaymentBundle.create(transfers=transfers, tokens=outbound_tokens)
 
+    def verify_transfer_with_reason(self, transfer: Transfer, token: Token) -> tuple[bool, str]:
+        """Verify transfer signature and policy constraints with explicit rejection reason."""
+        if transfer.transfer_id in self.processed_transfer_ids:
+            return False, "REPLAY_TRANSFER_ID"
+        if transfer.receiver_pk != self.public_key_hex:
+            return False, "WRONG_RECEIVER"
+        if transfer.hop_count > self.policy.MAX_HOPS:
+            return False, "MAX_HOPS_EXCEEDED"
+        if transfer.parent_transfer_id != token.last_transfer_id:
+            return False, "BROKEN_PARENT_LINK"
+        expected_prev_hash = token.last_transfer_hash
+        if transfer.prev_transfer_hash != expected_prev_hash:
+            return False, "BROKEN_HASH_LINK"
+        if not is_not_expired(token.created_at, self.policy.TOKEN_EXPIRY_SECONDS):
+            return False, "TOKEN_EXPIRED"
+        if not verify(transfer.signing_payload(), transfer.signature, transfer.sender_pk):
+            return False, "BAD_TRANSFER_SIG"
+        return True, "OK"
+
     def verify_transfer(self, transfer: Transfer, token: Token) -> bool:
         """Verify transfer signature and policy constraints."""
-        if transfer.transfer_id in self.processed_transfer_ids:
-            return False
-        if transfer.receiver_pk != self.public_key_hex:
-            return False
-        if token.hop_count > self.policy.MAX_TOKEN_HOPS:
-            return False
-        if not is_not_expired(token.created_at, self.policy.TOKEN_EXPIRY_SECONDS):
-            return False
-        if not verify(transfer.signing_payload(), transfer.signature, transfer.sender_pk):
-            return False
-        return True
+        ok, _ = self.verify_transfer_with_reason(transfer, token)
+        return ok
+
+    def apply_transfer_with_reason(self, transfer: Transfer, token: Token) -> tuple[bool, str]:
+        """Apply verified transfer into wallet state with explicit reason."""
+        ok, reason = self.verify_transfer_with_reason(transfer, token)
+        if not ok:
+            return False, reason
+        if self.balance() + token.value > self.policy.MAX_BALANCE:
+            return False, "MAX_BALANCE_EXCEEDED"
+
+        received = deepcopy(token)
+        received.current_owner = self.public_key_hex
+        received.last_transfer_id = transfer.transfer_id
+        received.last_transfer_hash = transfer.payload_hash()
+        received.hop_count += 1
+
+        self.utr[token.token_id] = received
+        self.transfer_history[token.token_id] = transfer.transfer_id
+        self.transfer_hashes[transfer.transfer_id] = transfer.payload_hash()
+        self.processed_transfer_ids.add(transfer.transfer_id)
+        return True, "ACCEPTED"
 
     def apply_transfer(self, transfer: Transfer, token: Token) -> bool:
         """Apply verified transfer into wallet state."""
-        if not self.verify_transfer(transfer, token):
-            return False
-        if self.balance() + token.value > self.policy.MAX_WALLET_BALANCE:
-            return False
-        self.utr[token.token_id] = deepcopy(token)
-        self.transfer_history[token.token_id] = transfer.transfer_id
-        self.processed_transfer_ids.add(transfer.transfer_id)
-        return True
+        ok, _ = self.apply_transfer_with_reason(transfer, token)
+        return ok
 
     def receive_bundle(self, bundle: PaymentBundle) -> list[tuple[str, bool]]:
         """Apply all transfers from a payment bundle."""
@@ -111,6 +138,15 @@ class Wallet:
             token = bundle.tokens[transfer.token_id]
             ok = self.apply_transfer(transfer, token)
             results.append((transfer.transfer_id, ok))
+        return results
+
+    def receive_bundle_with_reasons(self, bundle: PaymentBundle) -> list[tuple[str, bool, str]]:
+        """Apply all transfers and provide explicit accept/reject reasons."""
+        results: list[tuple[str, bool, str]] = []
+        for transfer in bundle.transfers:
+            token = bundle.tokens[transfer.token_id]
+            ok, reason = self.apply_transfer_with_reason(transfer, token)
+            results.append((transfer.transfer_id, ok, reason))
         return results
 
     def snapshot_tokens(self) -> Iterable[Token]:
