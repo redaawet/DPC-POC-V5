@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from copy import deepcopy
 
 from crypto.crypto_utils import verify
 from issuer.issuer import Issuer
@@ -26,6 +28,9 @@ class ReconciliationServer:
         self.ledger: dict[str, SettlementRecord] = {}
         self.accepted_chains: dict[str, tuple[str | None, str | None, int]] = {}
         self.transfer_hashes: dict[str, str] = {}
+        self.accepted_transfers: list[tuple[Transfer, Token]] = []
+        self.revoked_wallets: dict[str, datetime] = {}
+        self.recovery_reissued: set[tuple[str, str]] = set()
 
     def _verify_issuer_root(self, token: Token) -> bool:
         origin = token.origin_token_id or token.token_id
@@ -51,19 +56,83 @@ class ReconciliationServer:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "BAD_ISSUER_SIG")
             elif transfer.hop_count > self.policy.MAX_HOPS:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "MAX_HOPS_EXCEEDED")
+            elif transfer.nonce > self.policy.MAX_HOPS:
+                rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "MAX_HOPS_EXCEEDED")
             elif transfer.parent_transfer_id != token.last_transfer_id:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "BROKEN_PARENT_LINK")
+            elif transfer.parent_transfer_hash != expected_prev_hash:
+                rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "BROKEN_PARENT_HASH_LINK")
             elif transfer.prev_transfer_hash != expected_prev_hash:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "BROKEN_HASH_LINK")
             elif token.token_id in self.accepted_chains and self.accepted_chains[token.token_id] != chain_key:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "DOUBLE_SPEND", "CONFLICTING_CHAIN")
             elif token.token_id in self.ledger:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "DOUBLE_SPEND", "TOKEN_ALREADY_SETTLED")
+            elif (int(datetime.now(tz=timezone.utc).timestamp()) - token.issue_timestamp) > self.policy.TOKEN_EXPIRY_SECONDS:
+                rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "TOKEN_EXPIRED")
             else:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "ACCEPTED", "OK")
                 self.ledger[token.token_id] = rec
                 self.accepted_chains[token.token_id] = chain_key
                 self.transfer_hashes[transfer.transfer_id] = transfer.payload_hash()
+                self.accepted_transfers.append((deepcopy(transfer), deepcopy(token)))
 
             results.append(rec)
         return results
+
+    def revoke_wallet(self, public_key: str) -> None:
+        """Revoke a lost/stolen wallet identity."""
+        self.revoked_wallets[public_key] = datetime.now(tz=timezone.utc)
+
+    def _recovery_wait_elapsed(self, public_key: str, *, at_time: datetime | None = None) -> bool:
+        revoked_at = self.revoked_wallets.get(public_key)
+        if revoked_at is None:
+            return False
+        now = at_time or datetime.now(tz=timezone.utc)
+        wait_seconds = (now - revoked_at).total_seconds()
+        return wait_seconds > self.policy.TOKEN_EXPIRY_SECONDS
+
+    def reconstruct_safe_balance(self, revoked_public_key: str) -> int:
+        """Compute safe recoverable balance for revoked wallet after settlement window."""
+        issued_for_wallet = [
+            token
+            for token in self.issuer.issued_tokens.values()
+            if token.current_owner == revoked_public_key
+        ]
+        externally_deposited_token_ids = {
+            token.token_id
+            for transfer, token in self.accepted_transfers
+            if transfer.sender_pk == revoked_public_key and transfer.receiver_pk != revoked_public_key
+        }
+        safe_tokens = [token for token in issued_for_wallet if token.token_id not in externally_deposited_token_ids]
+        return sum(token.value for token in safe_tokens)
+
+    def reissue_recovered_balance(
+        self,
+        revoked_public_key: str,
+        new_public_key: str,
+        *,
+        at_time: datetime | None = None,
+    ) -> list[Token]:
+        """Mint replacement tokens after waiting window passes."""
+        if not self._recovery_wait_elapsed(revoked_public_key, at_time=at_time):
+            raise ValueError("RECOVERY_WAIT_NOT_ELAPSED")
+        if (revoked_public_key, new_public_key) in self.recovery_reissued:
+            return []
+
+        issued_for_wallet = [
+            token
+            for token in self.issuer.issued_tokens.values()
+            if token.current_owner == revoked_public_key
+        ]
+        externally_deposited_token_ids = {
+            token.token_id
+            for transfer, token in self.accepted_transfers
+            if transfer.sender_pk == revoked_public_key and transfer.receiver_pk != revoked_public_key
+        }
+        safe_tokens = [token for token in issued_for_wallet if token.token_id not in externally_deposited_token_ids]
+        reissued: list[Token] = []
+        for safe_token in safe_tokens:
+            reissued.append(self.issuer.mint_token(owner_pk=new_public_key, value=safe_token.value))
+        self.recovery_reissued.add((revoked_public_key, new_public_key))
+        return reissued
