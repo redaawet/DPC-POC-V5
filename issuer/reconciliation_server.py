@@ -4,10 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from copy import deepcopy
+from typing import Callable
 
 from crypto.crypto_utils import verify
 from issuer.issuer import Issuer
 from protocol.policy import PolicyConfig
+from protocol.proxy_sync import SyncHeartbeat, verify_heartbeat
 from digital_token.poc_models import PaymentBundle, Token, Transfer
 
 
@@ -57,6 +59,7 @@ class ReconciliationServer:
         self.transfer_hashes: dict[str, str] = {}
         self.accepted_transfers: list[tuple[Transfer, Token]] = []
         self.accepted_transfer_times: dict[str, datetime] = {}
+        self.last_sync: dict[str, datetime] = {}
         self.recovery_engine = RecoveryEngine(
             policy=self.policy,
             revoked_wallets={},
@@ -101,7 +104,7 @@ class ReconciliationServer:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "DOUBLE_SPEND", "CONFLICTING_CHAIN")
             elif token.token_id in self.ledger:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "DOUBLE_SPEND", "TOKEN_ALREADY_SETTLED")
-            elif revoked_at is not None and transfer.timestamp > revoked_at:
+            elif revoked_at is not None and transfer.timestamp >= revoked_at:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "REVOKED_SENDER")
             elif (int(datetime.now(tz=timezone.utc).timestamp()) - token.issue_timestamp) > self.policy.TOKEN_EXPIRY_SECONDS:
                 rec = SettlementRecord(token.token_id, transfer.transfer_id, "POLICY_VIOLATION", "TOKEN_EXPIRED")
@@ -115,6 +118,35 @@ class ReconciliationServer:
 
             results.append(rec)
         return results
+
+    def apply_sync_heartbeat(self, hb: SyncHeartbeat) -> list[str]:
+        """Apply a verified proxy-sync heartbeat and refresh token last_sync timestamps."""
+        if not verify_heartbeat(hb):
+            return []
+        now = self.now_fn()
+        if now.timestamp() - hb.timestamp > self.policy.TOKEN_EXPIRY_SECONDS:
+            return []
+        refreshed: list[str] = []
+        wallet_pk = hb.wallet_pk.hex()
+        for token_id in hb.token_ids:
+            token = self.issuer.issued_tokens.get(token_id)
+            if token is None:
+                continue
+            if token.current_owner != wallet_pk:
+                continue
+            self.last_sync[token_id] = now
+            refreshed.append(token_id)
+        return refreshed
+
+    def is_token_expired(self, token_id: str, *, at_time: datetime | None = None) -> bool:
+        """Return whether a token is expired relative to its last issuer/proxy sync."""
+        token = self.issuer.issued_tokens.get(token_id)
+        if token is None:
+            return True
+        reference_time = at_time or self.now_fn()
+        last_sync = self.last_sync.get(token_id)
+        last_sync_ts = int(last_sync.timestamp()) if last_sync is not None else token.issue_timestamp
+        return int(reference_time.timestamp()) - last_sync_ts > self.policy.TOKEN_EXPIRY_SECONDS
 
     def revoke_wallet(self, public_key: str) -> None:
         """Revoke a lost/stolen wallet identity."""

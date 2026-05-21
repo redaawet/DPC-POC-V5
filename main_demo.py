@@ -1,22 +1,37 @@
 """Demonstration scenario for offline CBDC token payments."""
 from __future__ import annotations
 
+import time
+
 from crypto.crypto_utils import generate_keypair
 from issuer.issuer import Issuer
 from issuer.reconciliation_server import ReconciliationServer
-from protocol.policy import PolicyConfig
+from protocol.network_simulator import send_bundle
+from protocol.policy import PolicyConfig, PolicyError
 from wallet.offline_wallet import Wallet
+
+# Policy values match the thesis specification (Chapter 3 / Chapter 5):
+#   MAX_TX_VALUE     = 1 000 ETB   (per-transaction cap, T3)
+#   MAX_HOPS         = 7           (offline hop limit, T1)
+#   MAX_BALANCE      = 10 000 ETB  (wallet accumulation cap, T2)
+#   TOKEN_EXPIRY     = 604 800 s   (7-day TTL, T4)
+# See tests/test_offline_cbdc_poc.py for the full automated test suite.
+
+
+def make_wallet(name: str, policy: PolicyConfig) -> Wallet:
+    """Create a wallet with a fresh Ed25519 key pair."""
+    sk, pk = generate_keypair()
+    return Wallet(name, sk, pk, policy)
 
 
 def print_wallet_state(label: str, wallet: Wallet) -> None:
-    print(f"{label} balance: {wallet.balance()}")
-    print(
-        f"{label} UTR tokens: "
-        f"{[(t.token_id[:8], t.value, t.hop_count, t.last_transfer_id[:8] if t.last_transfer_id else None) for t in wallet.snapshot_tokens()]}"
-    )
+    """Print compact wallet state for the demo."""
+    print(f"{label} balance: {wallet.balance()} ETB")
+    print(f"{label} UTR: {[(t.token_id[:8], t.value, t.nonce, t.hop_count) for t in wallet.snapshot_tokens()]}")
 
 
 def print_receive_results(step: str, results: list[tuple[str, bool, str]]) -> None:
+    """Print receiver-side accept/reject results."""
     print(step)
     for transfer_id, ok, reason in results:
         status = "ACCEPTED" if ok else "REJECTED"
@@ -24,98 +39,77 @@ def print_receive_results(step: str, results: list[tuple[str, bool, str]]) -> No
 
 
 def main() -> None:
-    policy = PolicyConfig(MAX_TX_VALUE=100, MAX_HOPS=3, MAX_BALANCE=50, TOKEN_EXPIRY_SECONDS=3600)
+    policy = PolicyConfig(
+        MAX_TX_VALUE=1000,
+        MAX_HOPS=7,
+        MAX_BALANCE=10000,
+        TOKEN_EXPIRY_SECONDS=604800,  # 7 days
+    )
+    print(
+        "Policy: "
+        f"MAX_TX_VALUE={policy.MAX_TX_VALUE}, MAX_HOPS={policy.MAX_HOPS}, "
+        f"MAX_BALANCE={policy.MAX_BALANCE}, TOKEN_EXPIRY_SECONDS={policy.TOKEN_EXPIRY_SECONDS}"
+    )
 
     issuer_sk, issuer_pk = generate_keypair()
     issuer = Issuer(issuer_sk, issuer_pk)
-    print("1) Issuer keypair generated")
+    alice = make_wallet("Alice", policy)
+    bob = make_wallet("Bob", policy)
+    carol = make_wallet("Carol", policy)
+    dave = make_wallet("Dave", policy)
+    erin = make_wallet("Erin", policy)
+    print("1) Issuer and wallets created")
 
-    alice_sk, alice_pk = generate_keypair()
-    bob_sk, bob_pk = generate_keypair()
-    carol_sk, carol_pk = generate_keypair()
-    dave_sk, dave_pk = generate_keypair()
-    eve_sk, eve_pk = generate_keypair()
-    frank_sk, frank_pk = generate_keypair()
-
-    alice = Wallet("Alice", alice_sk, alice_pk, policy)
-    bob = Wallet("Bob", bob_sk, bob_pk, policy)
-    carol = Wallet("Carol", carol_sk, carol_pk, policy)
-    dave = Wallet("Dave", dave_sk, dave_pk, policy)
-    eve = Wallet("Eve", eve_sk, eve_pk, policy)
-    frank = Wallet("Frank", frank_sk, frank_pk, policy)
-    print("2) Wallets created: Alice, Bob, Carol, Dave, Eve, Frank")
-
-    for value in (10, 10, 30):
-        alice.receive_token(issuer.mint_token(owner_pk=alice_pk, value=value))
-    print("3) Issuer minted [10,10,30] for Alice")
-    print_wallet_state("Alice", alice)
+    alice.receive_token(issuer.mint_token(owner_pk=alice.public_key_hex, value=500))
+    payment = alice.create_payment(receiver_pk=bob.public_key_hex, amount=500)
+    encrypted_results = send_bundle(alice, bob, payment, encrypt=True)
+    print(f"2) Alice -> Bob encrypted simulated BLE transfer: {encrypted_results}")
     print_wallet_state("Bob", bob)
 
-    bundle_ab = alice.create_payment(receiver_pk=bob_pk, amount=10)
-    print(f"\n4) Alice -> Bob bundle {bundle_ab.bundle_id}")
-    print(f"Transfers (hop_count): {[(t.transfer_id[:8], t.hop_count) for t in bundle_ab.transfers]}")
-    rx_results = bob.receive_bundle_with_reasons(bundle_ab)
-    print_receive_results("Receive results:", rx_results)
-    print_wallet_state("Alice", alice)
-    print_wallet_state("Bob", bob)
+    print("\n3) T2 balance cap rejection at 10,000 ETB:")
+    carol.receive_token(issuer.mint_token(owner_pk=carol.public_key_hex, value=9_500))
+    dave.receive_token(issuer.mint_token(owner_pk=dave.public_key_hex, value=600))
+    overflow_bundle = dave.create_payment(receiver_pk=carol.public_key_hex, amount=600)
+    print_receive_results("Receive results:", carol.receive_bundle_with_reasons(overflow_bundle))
 
-    bundle_bc = bob.create_payment(receiver_pk=carol_pk, amount=10)
-    print(f"\n5) Bob -> Carol bundle {bundle_bc.bundle_id}")
-    print(f"Transfers (hop_count): {[(t.transfer_id[:8], t.hop_count) for t in bundle_bc.transfers]}")
-    rx_results = carol.receive_bundle_with_reasons(bundle_bc)
-    print_receive_results("Receive results:", rx_results)
-    print_wallet_state("Bob", bob)
-    print_wallet_state("Carol", carol)
+    print("\n4) T3 single transaction cap rejection at 1,200 ETB:")
+    alice.receive_token(issuer.mint_token(owner_pk=alice.public_key_hex, value=1_200))
+    try:
+        alice.create_payment(receiver_pk=bob.public_key_hex, amount=1_200)
+    except PolicyError as exc:
+        print(f"  rejected: {exc}")
 
-    bundle_cd = carol.create_payment(receiver_pk=dave_pk, amount=10)
-    print(f"\n6) Carol -> Dave bundle {bundle_cd.bundle_id}")
-    print(f"Transfers (hop_count): {[(t.transfer_id[:8], t.hop_count) for t in bundle_cd.transfers]}")
-    rx_results = dave.receive_bundle_with_reasons(bundle_cd)
-    print_receive_results("Receive results:", rx_results)
-    print_wallet_state("Carol", carol)
-    print_wallet_state("Dave", dave)
+    print("\n5) T1 hop limit rejection on hop 8:")
+    hop_token = issuer.mint_token(owner_pk=alice.public_key_hex, value=100)
+    # Demo shortcut: start this token at hop 6 so one valid transfer reaches hop 7
+    # and a tampered next-hop bundle demonstrates the hop-8 rejection without a long walkthrough.
+    hop_token.nonce = 6
+    hop_token.hop_count = 6
+    alice.receive_token(hop_token)
+    hop7_bundle = alice.create_payment(receiver_pk=bob.public_key_hex, amount=100)
+    assert bob.receive_bundle_with_reasons(hop7_bundle)[0][1] is True
+    for token in bob.utr.values():
+        token.nonce = 6
+        token.hop_count = 6
+    hop8_bundle = bob.create_payment(receiver_pk=dave.public_key_hex, amount=100)
+    for transfer in hop8_bundle.transfers:
+        transfer.nonce = 8
+        transfer.hop_count = 8
+    print_receive_results("Receive results:", dave.receive_bundle_with_reasons(hop8_bundle))
 
-    # Additional path to ensure Bob owns a token at hop_count=3.
-    bundle_ab_second = alice.create_payment(receiver_pk=bob_pk, amount=10)
-    bob.receive_bundle(bundle_ab_second)
-    bundle_bc_second = bob.create_payment(receiver_pk=carol_pk, amount=10)
-    carol.receive_bundle(bundle_bc_second)
-    bundle_cb = carol.create_payment(receiver_pk=bob_pk, amount=10)
-    bob.receive_bundle(bundle_cb)
-    print("\n7) Bob receives token back at hop_count=3")
-    print_wallet_state("Bob", bob)
+    print("\n6) T4 TTL expiry rejection:")
+    expired_token = issuer.mint_token(owner_pk=erin.public_key_hex, value=100)
+    erin.receive_token(expired_token)
+    expired_bundle = erin.create_payment(receiver_pk=bob.public_key_hex, amount=100)
+    for token in expired_bundle.tokens.values():
+        token.issue_timestamp = int(time.time()) - 8 * 86400
+    print_receive_results("Receive results:", bob.receive_bundle_with_reasons(expired_bundle))
 
-    bundle_be = bob.create_payment(receiver_pk=eve_pk, amount=10)
-    print(f"\n8) Bob -> Eve after max hops reached bundle {bundle_be.bundle_id}")
-    print(f"Transfers (hop_count): {[(t.transfer_id[:8], t.hop_count) for t in bundle_be.transfers]}")
-    hop_reject = eve.receive_bundle_with_reasons(bundle_be)
-    print_receive_results("Receive results:", hop_reject)
-    print_wallet_state("Bob", bob)
-    print_wallet_state("Eve", eve)
-
-    print("\n9) Wallet overflow attempt (expect REJECTION):")
-    frank.receive_token(issuer.mint_token(owner_pk=frank_pk, value=25))
-    overflow_bundle = alice.create_payment(receiver_pk=frank_pk, amount=30)
-    overflow_result = frank.receive_bundle_with_reasons(overflow_bundle)
-    print_receive_results("Receive results:", overflow_result)
-
+    print("\n7) Reconciliation snapshot:")
     reconciler = ReconciliationServer(issuer, policy=policy)
-    print("\n10) Reconciliation results:")
-    all_bundles = [bundle_ab, bundle_bc, bundle_cd, bundle_ab_second, bundle_bc_second, bundle_cb, bundle_be, overflow_bundle]
-    for idx, bundle in enumerate(all_bundles, start=1):
+    for idx, bundle in enumerate([payment, overflow_bundle, hop7_bundle], start=1):
         settlement = reconciler.process_bundle(bundle)
-        print(f"Bundle {idx} ({bundle.bundle_id[:8]}):")
-        for rec in settlement:
-            print(vars(rec))
-
-    print("\n11) Re-submit first bundle to demonstrate DOUBLE_SPEND:")
-    second_settlement = reconciler.process_bundle(bundle_ab)
-    for rec in second_settlement:
-        print(vars(rec))
-
-    print("\n12) Ledger snapshot:")
-    for token_id, rec in reconciler.ledger.items():
-        print(token_id[:8], rec.status, rec.reason)
+        print(f"Bundle {idx} ({bundle.bundle_id[:8]}): {[vars(rec) for rec in settlement]}")
 
 
 if __name__ == "__main__":

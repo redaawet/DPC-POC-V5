@@ -45,7 +45,7 @@ class ReconciliationEngine:
         if not _is_not_expired(token.expiry, at):
             return ReconciliationResult(source=source, token_id=token.token_id, status="REJECTED", reason="EXPIRED")
 
-        max_hops = int(token.policy.get("max_hops", 0))
+        max_hops = int(getattr(token, "policy", {}).get("max_hops", 7))
         hop_count = len(token.transfer_chain)
         if hop_count > max_hops:
             return ReconciliationResult(source=source, token_id=token.token_id, status="REJECTED", reason="MAX_HOPS_EXCEEDED")

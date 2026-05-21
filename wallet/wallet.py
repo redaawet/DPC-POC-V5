@@ -57,9 +57,14 @@ class Wallet:
         if amount == 0:
             return []
 
+        tokens = sorted(self.utr.values(), key=lambda tok: tok.value)
+        exact = _find_exact_token_subset(tokens, amount)
+        if exact is not None:
+            return exact
+
         selected: list[Token] = []
         total = 0
-        for token in sorted(self.utr.values(), key=lambda tok: tok.value):
+        for token in tokens:
             selected.append(token)
             total += token.value
             if total >= amount:
@@ -155,3 +160,26 @@ def _token_from_payload(payload: str) -> Token:
         issuer_signature=data.get("issuer_signature", data.get("issuer_sig", "")),
         transfer_chain=transfer_chain,
     )
+
+
+def _find_exact_token_subset(tokens: list[Token], amount: int) -> list[Token] | None:
+    """Return a smallest exact-value subset when one exists."""
+    best: list[Token] | None = None
+
+    def search(index: int, selected: list[Token], total: int) -> None:
+        nonlocal best
+        if total == amount:
+            if best is None or len(selected) < len(best):
+                best = list(selected)
+            return
+        if total > amount or index >= len(tokens):
+            return
+        if best is not None and len(selected) >= len(best):
+            return
+        selected.append(tokens[index])
+        search(index + 1, selected, total + tokens[index].value)
+        selected.pop()
+        search(index + 1, selected, total)
+
+    search(0, [], 0)
+    return best

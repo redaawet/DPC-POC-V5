@@ -82,6 +82,8 @@ pytest -q tests/test_offline_cbdc_poc.py -k "t9 or recovery or revoked"
 
 ## Features implemented
 
+> See [docs/scope_and_limitations.md](docs/scope_and_limitations.md) for a full mapping of thesis claims to implementation status.
+
 - Offline peer-to-peer transfer bundles.
 - Ed25519 signatures for issuer and transfer messages.
 - UTR (unspent) and STR (spent) registers.

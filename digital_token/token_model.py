@@ -106,7 +106,21 @@ class Token:
         """Validate issuer signature and each transfer continuity/signature."""
         if issuer_pk != self.issuer_pk:
             return False
-        if not verify_signature(self.issuer_pk, self.issuance_payload(), self.issuer_signature):
+        issued_owner_pk = self.transfer_chain[0].sender_pk if self.transfer_chain else self.owner_pk
+        issued_payload = json.dumps(
+            OrderedDict(
+                [
+                    ("token_id", self.token_id),
+                    ("value", self.value),
+                    ("issuer_pk", self.issuer_pk),
+                    ("owner_pk", issued_owner_pk),
+                    ("expiry", self.expiry),
+                ]
+            ),
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        if not verify_signature(self.issuer_pk, issued_payload, self.issuer_signature):
             return False
 
         owner_pk = self.owner_pk if not self.transfer_chain else None
