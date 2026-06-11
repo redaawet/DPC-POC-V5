@@ -1,3 +1,4 @@
+"""Data models for DPC tokens, wallets, and transfer records."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -7,6 +8,7 @@ import time
 
 @dataclass
 class PolicyConfig:
+    """Policy limits enforced offline."""
     max_offline_hops: int = 7
     max_wallet_balance_etb: float = 10_000.0
     max_transaction_value_etb: float = 1_000.0

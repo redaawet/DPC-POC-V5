@@ -1,3 +1,4 @@
+"""Issuer reconciliation engine implementing first-valid-claim double-spend prevention."""
 from __future__ import annotations
 
 from .crypto import ed25519_verify, hex_to_pubkey_bytes
@@ -6,14 +7,21 @@ from .wallet import token_signature_message
 
 
 class IssuerLedger:
+    """
+    Issuer's central ledger for CBDC reconciliation.
+    Implements first-valid-claim: first legitimate owner wins, subsequent claims flagged as double-spend.
+    """
+
     def __init__(self):
-        self.registry: dict[str, str] = {}
-        self.token_values: dict[str, float] = {}
-        self.accepted_tokens: dict[str, Token] = {}
-        self.suspicious_keys: set[str] = set()
-        self.submission_log: list[dict] = []
+        """Initialize empty ledger, suspicious key registry, and audit log."""
+        self.registry: dict[str, str] = {}         # token_id -> current_owner_pubkey
+        self.token_values: dict[str, float] = {}   # token_id -> denomination
+        self.accepted_tokens: dict[str, Token] = {}  # token_id -> token
+        self.suspicious_keys: set[str] = set()     # flagged for double-spend attempts
+        self.submission_log: list[dict] = []        # full audit trail
 
     def _valid_issuer_signature(self, token: Token) -> bool:
+        """Verify issuer's Ed25519 signature for token authenticity."""
         return ed25519_verify(
             hex_to_pubkey_bytes(token.issuer_pubkey_hex),
             token_signature_message(
@@ -26,6 +34,16 @@ class IssuerLedger:
         )
 
     def submit_token(self, token: Token, submitter_pubkey_hex: str) -> dict:
+        """
+        Process a token submission for reconciliation.
+
+        Returns result dict with accepted (bool), owner, and reason.
+        Logic:
+        1. Verify issuer signature (tamper detection)
+        2. If new token: accept, register owner
+        3. If re-submission by same owner: idempotent accept
+        4. If different owner: CONFLICT - flag submitter and previous owner
+        """
         if not self._valid_issuer_signature(token):
             result = {
                 "token_id": token.token_id,
@@ -54,6 +72,7 @@ class IssuerLedger:
                 "reason": "accepted",
             }
         else:
+            # Double-spend conflict: flag the attacker and the previous owner
             if len(token.transfer_history) >= 2:
                 self.suspicious_keys.add(token.transfer_history[-2])
             self.suspicious_keys.add(submitter_pubkey_hex)
@@ -68,9 +87,11 @@ class IssuerLedger:
         return result
 
     def submit_batch(self, tokens: list[Token], submitter_pubkey_hex: str) -> list[dict]:
+        """Submit multiple tokens at once."""
         return [self.submit_token(token, submitter_pubkey_hex) for token in tokens]
 
     def get_balance(self, owner_pubkey_hex: str) -> float:
+        """Get total balance of tokens owned by a pubkey in the registry."""
         return sum(
             self.token_values[token_id]
             for token_id, owner in self.registry.items()
@@ -78,9 +99,11 @@ class IssuerLedger:
         )
 
     def is_flagged(self, pubkey_hex: str) -> bool:
+        """Check if a pubkey is flagged for suspicious activity."""
         return pubkey_hex in self.suspicious_keys
 
     def print_report(self) -> None:
+        """Print formatted audit report of all submissions."""
         print("[Ledger] Submission Report")
         print("[Ledger] token_id                         accepted owner    reason")
         for entry in self.submission_log:

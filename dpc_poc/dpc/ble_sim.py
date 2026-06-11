@@ -1,3 +1,8 @@
+"""Simulated Bluetooth Low Energy channel for DPC offline payments.
+
+Encrypts payloads with ChaCha20-Poly1305 using X25519-derived session keys.
+No actual BLE hardware; all communication is simulated via Python function calls.
+"""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -10,7 +15,16 @@ from .wallet import Wallet
 
 
 class BLEChannel:
+    """
+    Simulates a BLE link between two wallets with optional session encryption.
+    Derives shared key via X25519 ECDH, encrypts payloads with ChaCha20-Poly1305.
+    """
+
     def __init__(self, wallet_a: Wallet, wallet_b: Wallet, encrypt: bool = True):
+        """
+        Initialize BLE channel between two wallets.
+        If encrypt=True, derive session key from X25519 ECDH.
+        """
         self.wallet_a = wallet_a
         self.wallet_b = wallet_b
         self.encrypt = encrypt
@@ -25,11 +39,15 @@ class BLEChannel:
             )
 
     def transmit(self, payload_bytes: bytes, direction: str = "A->B") -> bytes:
+        """
+        Transmit payload over BLE channel. Optionally encrypts/decrypts.
+        Returns decrypted bytes (simulating successful delivery).
+        """
         print(f"[BLE] {direction} | {len(payload_bytes)} bytes transmitted")
         if not self.encrypt:
             return payload_bytes
-        assert self.session_key is not None
-        assert self.session_nonce_12 is not None
+        if self.session_key is None or self.session_nonce_12 is None:
+            raise RuntimeError("Session key not initialized")
         encrypted = chacha20_poly1305_encrypt(self.session_key, self.session_nonce_12, payload_bytes)
         return chacha20_poly1305_decrypt(self.session_key, self.session_nonce_12, encrypted)
 
@@ -40,6 +58,12 @@ class BLEChannel:
         token_id: str,
         amount: float,
     ) -> tuple[TransferRecord, Token]:
+        """
+        Full BLE payment handshake:
+        1. Sender creates transfer and new token
+        2. Serialize and transmit
+        3. Recipient receives, deserializes, and validates
+        """
         record, new_token = sender_wallet.send_token(token_id, recipient_wallet.pubkey_hex, amount)
         payload = json.dumps(
             {"record": asdict(record), "token": asdict(new_token)},
@@ -64,6 +88,12 @@ class BLEChannel:
         payer_token_id: str,
         owed_amount: float,
     ) -> None:
+        """
+        Swap protocol for peer-to-peer change generation:
+        1. Payer sends full token denomination to payee
+        2. Payee sends back change token
+        3. Atomicity ensured by same BLE session
+        """
         payer_token = payer_wallet.state.unspent_tokens[payer_token_id]
         change_amount = payer_token.denomination - owed_amount
         change_token = payee_wallet.get_token_for_swap(change_amount)
