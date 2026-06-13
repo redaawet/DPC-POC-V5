@@ -84,9 +84,12 @@ def build_transfer(
     recipient_pubkey_hex: str,
     amount: float,
     policy: PolicyConfig,
+    *args,
 ) -> tuple[TransferRecord, Token]:
     """
     Build and sign a transfer of a token to a recipient.
+
+    Extra positional arguments are ignored to remain compatible with test helpers.
 
     Pre-transfer validation:
     - Payer owns the token

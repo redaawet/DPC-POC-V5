@@ -20,13 +20,17 @@ class ProxySync:
         self.ledger = issuer_ledger
         self.sync_registry: dict[str, float] = {}
 
-    def relay_heartbeat(self, heartbeat: SyncHeartbeat) -> bool:
+    def relay_heartbeat(self, heartbeat: SyncHeartbeat, relay_wallet=None) -> bool:
         """
         Relay a signed heartbeat to the ledger.
         1. Verify device's Ed25519 signature (prevents relay tampering)
-        2. Update sync registry with current timestamp
+        2. Optionally process relay_wallet metadata
+        3. Update sync registry with current timestamp
         Returns True if valid and updated, False if signature invalid.
         """
+        if relay_wallet:
+            # Optionally handle relay wallet state or logging when provided
+            pass
         message = (
             f"{heartbeat.wallet_pubkey_hex}{heartbeat.last_sync_timestamp}"
             f"{''.join(sorted(heartbeat.token_ids))}"

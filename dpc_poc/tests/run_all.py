@@ -17,6 +17,7 @@ TESTS = [
     ("T6", "Token lifecycle reset (circular spend)", "tests.t6_lifecycle_reset"),
     ("T7", "Swap protocol - change generation", "tests.t7_swap_change"),
     ("T8", "Double-spend prevention (first claim)", "tests.t8_double_spend"),
+    ("T9", "Seven-hop BLE linear-growth telemetry", "tests.t9_linear_growth"),
 ]
 
 

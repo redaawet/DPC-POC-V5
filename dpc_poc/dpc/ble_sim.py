@@ -28,6 +28,7 @@ class BLEChannel:
         self.wallet_a = wallet_a
         self.wallet_b = wallet_b
         self.encrypt = encrypt
+        self.previous_packet_size: int | None = None
         self.session_key: bytes | None = None
         self.session_nonce_12: bytes | None = None
         if encrypt:
@@ -38,17 +39,32 @@ class BLEChannel:
                 self.session_nonce_12,
             )
 
-    def transmit(self, payload_bytes: bytes, direction: str = "A->B") -> bytes:
+    def transmit(self, sender_name: str, receiver_name: str, packet_data) -> bytes:
         """
-        Transmit payload over BLE channel. Optionally encrypts/decrypts.
-        Returns decrypted bytes (simulating successful delivery).
+        Transmit packet data over BLE while logging packet size and growth.
         """
-        print(f"[BLE] {direction} | {len(payload_bytes)} bytes transmitted")
+        if isinstance(packet_data, bytes):
+            packet_bytes = packet_data
+        elif isinstance(packet_data, str):
+            packet_bytes = packet_data.encode("utf-8")
+        else:
+            packet_bytes = json.dumps(packet_data, separators=(",", ":")).encode("utf-8")
+
+        current_size = len(packet_bytes)
+        if self.previous_packet_size is None:
+            growth_str = " | Base Packet Size"
+        else:
+            constant = current_size - self.previous_packet_size
+            growth_str = f" | Linear Increase Constant: +{constant} bytes" if constant > 0 else ""
+
+        print(f"[BLE] {sender_name}->{receiver_name} | {current_size} bytes transmitted{growth_str}")
+        self.previous_packet_size = current_size
+
         if not self.encrypt:
-            return payload_bytes
+            return packet_bytes
         if self.session_key is None or self.session_nonce_12 is None:
             raise RuntimeError("Session key not initialized")
-        encrypted = chacha20_poly1305_encrypt(self.session_key, self.session_nonce_12, payload_bytes)
+        encrypted = chacha20_poly1305_encrypt(self.session_key, self.session_nonce_12, packet_bytes)
         return chacha20_poly1305_decrypt(self.session_key, self.session_nonce_12, encrypted)
 
     def execute_transfer(
@@ -69,8 +85,9 @@ class BLEChannel:
             {"record": asdict(record), "token": asdict(new_token)},
             separators=(",", ":"),
         ).encode("utf-8")
-        direction = "A->B" if sender_wallet is self.wallet_a else "B->A"
-        received = self.transmit(payload, direction=direction)
+        sender_name = sender_wallet.pubkey_hex[:8]
+        receiver_name = recipient_wallet.pubkey_hex[:8]
+        received = self.transmit(sender_name, receiver_name, payload)
         data = json.loads(received.decode("utf-8"))
         received_record = TransferRecord(**data["record"])
         received_token = Token(**data["token"])
